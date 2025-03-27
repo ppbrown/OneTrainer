@@ -9,7 +9,7 @@ can also be used as a standalone program, via scripts/caption_ui.py
 """
 
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QLabel, QPushButton, QCheckBox, QLineEdit,
+    QMainWindow, QWidget, QLabel, QPushButton, QCheckBox, QLineEdit, QPlainTextEdit,
     QVBoxLayout, QHBoxLayout, QGridLayout, QFileDialog,
     QMessageBox, QSplitter
 )
@@ -28,6 +28,7 @@ from modules.util import path_util
 from modules.util.torch_util import default_device
 
 import cv2
+import torch
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -228,9 +229,9 @@ class CaptionUI(QMainWindow):
         self.image_label.wheel_scrolled.connect(self.draw_mask_radius)
         self.content_layout.addWidget(self.image_label, 1, 0, 1, 5)
 
-        # Row 2: prompt entry
-        self.prompt_line = QLineEdit()
-        self.prompt_line.returnPressed.connect(self.save_current)
+        # Row 2: prompt(caption) display and editing box
+        self.prompt_line = PlainTextEntry(self.save_current)
+        #self.prompt_line.returnPressed.connect(self.save_current)
         self.content_layout.addWidget(self.prompt_line, 2, 0, 1, 5)
 
     def set_mask_editing_enabled(self, state):
@@ -319,6 +320,7 @@ class CaptionUI(QMainWindow):
                     return ""
         return ""
 
+    # Might be better named "display image and caption"
     def switch_image(self, index: int):
         if index < 0 or index >= len(self.image_rel_paths):
             blank_img = Image.new("RGB", (512, 512), (0, 0, 0))
@@ -329,7 +331,7 @@ class CaptionUI(QMainWindow):
         self.pil_image = self.load_image()
         self.pil_mask = self.load_mask()
         self.prompt_text = self.load_prompt()
-        self.prompt_line.setText(self.prompt_text)
+        self.prompt_line.setPlainText(self.prompt_text)
 
         if self.pil_image:
             self.image_width = self.pil_image.width
@@ -512,6 +514,7 @@ class CaptionUI(QMainWindow):
         self.display_only_mask = not self.display_only_mask
         self.refresh_image()
 
+    # gets called if Enter pressed on either the image, or the caption for the image
     def save_current(self):
         if (
             not self.image_rel_paths or
@@ -526,8 +529,7 @@ class CaptionUI(QMainWindow):
         mask_path = os.path.splitext(image_rel)[0] + "-masklabel.png"
         mask_path = os.path.join(self.dir, mask_path)
 
-        self.prompt_text = self.prompt_line.text()
-
+        self.prompt_text = self.prompt_line.toPlainText()
         try:
             with open(prompt_path, "w", encoding="utf-8") as f:
                 f.write(self.prompt_text)
@@ -635,3 +637,26 @@ class ClickableLabel(QLabel):
         self.wheel_scrolled.emit(direction)
         event.accept()
 
+
+# ----------------------------------------------------
+# Subclass of QPlainTextEdit
+#  acts a little like QLineEntry, in that it triggers from ENTER key
+# ----------------------------------------------------
+
+class PlainTextEntry(QPlainTextEdit):
+    def __init__(self, on_enter_pressed, linecount=2, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.on_enter_pressed = on_enter_pressed
+        # defaults to 3 lines. lets make it 2 instead
+        font_metrics = self.fontMetrics()
+        line_height = font_metrics.lineSpacing()
+        self.setMinimumHeight(line_height * linecount + 10)
+
+    def keyPressEvent(self, event):
+        # Special case ENTER, but pass through everything else
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if event.modifiers() == Qt.NoModifier:
+                if callable(self.on_enter_pressed):
+                    self.on_enter_pressed()
+                return  # prevent newline character
+        super().keyPressEvent(event)
