@@ -3,12 +3,10 @@ from typing import Any
 
 from modules.util.args.BaseArgs import BaseArgs
 from modules.util.enum.DataType import DataType
-from modules.util.enum.GenerateCaptionsModel import GenerateCaptionsModel
 from modules.util.torch_util import default_device
 
 
 class GenerateCaptionsArgs(BaseArgs):
-    model: GenerateCaptionsModel
     sample_dir: str
     initial_caption: str
     caption_prefix: str
@@ -22,12 +20,11 @@ class GenerateCaptionsArgs(BaseArgs):
         super().__init__(data)
 
     @staticmethod
-    def parse_args() -> 'GenerateCaptionsArgs':
+    def parse_args(modelchoices: list[str]) -> 'GenerateCaptionsArgs':
         parser = argparse.ArgumentParser(description="One Trainer Generate Captions Script.")
-
         # @formatter:off
 
-        parser.add_argument("--model", type=GenerateCaptionsModel, required=True, dest="model", help="The model to use when generating captions", choices=list(GenerateCaptionsModel))
+        parser.add_argument("--model", type=str, required=True, dest="model", help="The model to use when generating captions", choices=modelchoices)
         parser.add_argument("--sample-dir", type=str, required=True, dest="sample_dir", help="Directory where samples are located")
         parser.add_argument("--initial-caption", type=str, default='', required=False, dest="initial_caption", help="An initial caption to start generating from")
         parser.add_argument("--caption-prefix", type=str, default='', required=False, dest="caption_prefix", help="Add this to the start of the generated caption (before initial caption)")
@@ -47,7 +44,6 @@ class GenerateCaptionsArgs(BaseArgs):
     def default_values():
         data = []
 
-        data.append(("model", GenerateCaptionsModel.BLIP, GenerateCaptionsModel, False))
         data.append(("sample_dir", "", str, False))
         data.append(("initial_caption", "", str, False))
         data.append(("caption_prefix", "", str, False))
