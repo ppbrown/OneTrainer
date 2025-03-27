@@ -1,3 +1,19 @@
+
+# This is the base class for all "caption an image" mode.s
+# Keep in mind that these are used by the GUI *and* by commandline.
+# Thats why the master list of child classes is kept here, rather than CaptionUI
+#
+# This class has a static method that goes through all child classes that are defined!
+# Cool!
+# .. except that they only get defined if their source code files are 
+# explicitly 'import'ed somewhere, and that can't be here, because
+# that causes a forbidden "circular import.
+
+# So, in your higher up code, you will probably want to import one or more of the child classes,
+# and then import this one for access to 
+#  BaseImageCaptionModel.get_all_model_choices()
+
+
 import contextlib
 import os
 from abc import ABCMeta, abstractmethod
@@ -8,6 +24,8 @@ from modules.util import path_util
 
 from PIL import Image
 from tqdm import tqdm
+
+from typing import Type, Dict
 
 
 class CaptionSample:
@@ -52,6 +70,14 @@ class CaptionSample:
 
 
 class BaseImageCaptionModel(metaclass=ABCMeta):
+
+    @abstractmethod
+    def __init__(self, device, dprecision, versionname=None):
+        """
+            If class suppports multiple versions, then versionname is expected to be 
+            one of the outputs from get_version_names()
+        """
+
     @staticmethod
     def __get_sample_filenames(sample_dir: str, include_subdirectories: bool = False) -> list[str]:
         sample_dir = Path(sample_dir)
@@ -78,6 +104,34 @@ class BaseImageCaptionModel(metaclass=ABCMeta):
 
         Returns: the generated caption
         """
+
+    # This is specific to a subclass. The global variant is get_choices_list()
+    @staticmethod
+    @abstractmethod
+    def get_version_names() -> list[str]:
+        """
+        Some model types have multiple versions, although most only have one.
+        The value(s) returned here will be displayed as the model choices in the CaptionUI window.
+        """
+
+
+    # Return a dictionary of names and matching classes.
+    # The names by themselves are suitable for use either in a GUI choices menu, or
+    # command-line --model option
+    @staticmethod
+    def get_all_model_choices() -> Dict[str, Type["BaseImageCaptionModel"]]:
+
+        def names_to_dict(classtype: Type["BaseImageCaptionModel"]):
+                ret = {}
+                for name in classtype.get_version_names():
+                    ret[name] = classtype
+                return ret
+        
+        namedict = {}
+        for child in BaseImageCaptionModel.__subclasses__():
+            namedict = namedict | names_to_dict(child)
+        return namedict
+    
 
     def caption_image(
             self,

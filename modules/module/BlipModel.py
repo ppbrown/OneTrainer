@@ -6,7 +6,7 @@ from transformers import BlipForConditionalGeneration, BlipProcessor
 
 
 class BlipModel(BaseImageCaptionModel):
-    def __init__(self, device: torch.device, dtype: torch.dtype):
+    def __init__(self, device: torch.device, dtype: torch.dtype, versionname=None):
         self.device = device
         self.dtype = dtype
 
@@ -34,3 +34,8 @@ class BlipModel(BaseImageCaptionModel):
         predicted_caption = (caption_prefix + predicted_caption + caption_postfix).strip()
 
         return predicted_caption
+    
+    
+    @staticmethod
+    def get_version_names() -> list[str]:
+        return ["BLIP"]

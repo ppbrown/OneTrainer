@@ -10,14 +10,26 @@ import onnxruntime
 
 
 class WDModel(BaseImageCaptionModel):
-    def __init__(self, device: torch.device, dtype: torch.dtype, wd_model_name, prob_limit):
+    variants = {
+        "WD14_V2":        "SmilingWolf/wd-v1-4-vit-tagger-v2",
+        "WD14_SWINV2_V3": "SmilingWolf/wd-swinv2-tagger-v3",
+        "WD14_EVA02_V3":  "SmilingWolf/wd-eva02-large-tagger-v3",
+    }
+
+    def __init__(self, device: torch.device, dtype: torch.dtype, versionname):
         self.device = device
         self.dtype = dtype
-        self.wd_model_name = wd_model_name
-        self.prob_limit = prob_limit
+        self.versionname = versionname
+
+        if not versionname in self.variants:
+            raise ValueError("WDModel.init unrecognized versionname "+versionname)
+        
+        self.prob_limit = 0.35 if "EVA02" not in  versionname else 0.5 
+        
+        hfname = self.variants[versionname]
 
         model_path = huggingface_hub.hf_hub_download(
-            "SmilingWolf/"+wd_model_name, "model.onnx"
+            hfname, "model.onnx"
         )
         if device.type == 'cpu':
             provider = "CPUExecutionProvider"
@@ -25,9 +37,8 @@ class WDModel(BaseImageCaptionModel):
             provider = "CUDAExecutionProvider" if "CUDAExecutionProvider" in onnxruntime.get_available_providers() else "CPUExecutionProvider"
         self.model = onnxruntime.InferenceSession(model_path, providers=[provider])
 
-        label_path = huggingface_hub.hf_hub_download(
-            "SmilingWolf/"+wd_model_name, "selected_tags.csv"
-        )
+        label_path = huggingface_hub.hf_hub_download(hfname, "selected_tags.csv")
+
         self.tag_names = []
         self.rating_indexes = []
         self.general_indexes = []
@@ -65,7 +76,7 @@ class WDModel(BaseImageCaptionModel):
         probs = self.model.run([label_name], {input_name: image})[0]
         probs = probs[0].astype(float)
 
-        general_labels = [(self.tag_names[i], probs[i]) for i in self.general_indexes if probs[i] > self.prob_limit]
+        general_labels = [(self.tag_names[i], probs[i]) for i in self.general_indexes if probs[i] > self.prob_limit5]
 
         sorted_general_labels = sorted(general_labels, key=lambda label: label[1], reverse=True)
         predicted_caption = ", ".join([
@@ -76,3 +87,7 @@ class WDModel(BaseImageCaptionModel):
         predicted_caption = (caption_prefix + predicted_caption + caption_postfix).strip()
 
         return predicted_caption
+
+    @staticmethod
+    def get_version_names() -> list[str]:
+        return list(WDModel.variants.keys())
