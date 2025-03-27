@@ -1,54 +1,92 @@
-from collections.abc import Callable
+# string_input_dialog.py
 
-import customtkinter as ctk
+"""
+XXX Check places that we use this...
+
+chatgpt says we could potentially replace this whole class:
+
+QInputDialog – specifically its static method QInputDialog.getText(...) – can serve as a straightforward replacement. It displays a small dialog with a single text field, an “OK” and “Cancel” button, an optional default value, and returns the user’s input.\
+     For example:
 
 
-class StringInputDialog(ctk.CTkToplevel):
+from PySide6.QtWidgets import QInputDialog, QLineEdit
+
+text, ok = QInputDialog.getText(
+    parent=self,
+    title="Your Title",
+    label="Enter something:",
+    echo=QLineEdit.Normal,
+    text="default value"
+)
+
+if ok:
+    print("User typed:", text)
+
+    
+"""
+
+from typing import Callable, Optional
+
+from PySide6.QtWidgets import (
+    QDialog, QGridLayout, QLabel, QLineEdit, QPushButton
+)
+from PySide6.QtCore import Qt
+
+
+class StringInputDialog(QDialog):
+
     def __init__(
-            self,
-            parent,
-            title: str,
-            question: str,
-            callback: Callable[[str], None],
-            default_value: str = None,
-            validate_callback: Callable[[str], bool] = None,
-            *args, **kwargs
+        self,
+        parent,
+        title: str,
+        question: str,
+        callback: Callable[[str], None],
+        default_value: Optional[str] = None,
+        validate_callback: Optional[Callable[[str], bool]] = None,
+        *args,
+        **kwargs
     ):
-        ctk.CTkToplevel.__init__(self, parent, *args, **kwargs)
-        self.parent = parent
+        super().__init__(parent, *args, **kwargs)
 
         self.callback = callback
         self.validate_callback = validate_callback
 
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
+        self.setWindowTitle(title)
+        self.resize(300, 120)
+        self.setModal(True)
 
-        self.title(title)
-        self.geometry("300x120")
-        self.resizable(False, False)
-        self.wait_visibility()
-        self.grab_set()
-        self.focus_set()
+        # Layout
+        layout = QGridLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        self.setLayout(layout)
 
-        self.question_label = ctk.CTkLabel(self, text=question)
-        self.question_label.grid(row=0, column=0, columnspan=2, sticky="we", padx=5, pady=5)
+        # Question label
+        self.question_label = QLabel(question, self)
+        layout.addWidget(self.question_label, 0, 0, 1, 2)
 
-        self.entry = ctk.CTkEntry(self, width=150)
-        self.entry.grid(row=1, column=0, columnspan=2, sticky="we", padx=10, pady=5)
+        # Entry
+        self.entry = QLineEdit(self)
+        layout.addWidget(self.entry, 1, 0, 1, 2)
 
-        self.ok_button = ctk.CTkButton(self, width=30, text="ok", command=self.ok)
-        self.ok_button.grid(row=2, column=0, sticky="we", padx=10, pady=5)
+        # Ok button
+        self.ok_button = QPushButton("ok", self)
+        self.ok_button.clicked.connect(self.ok)
+        layout.addWidget(self.ok_button, 2, 0, 1, 1)
 
-        self.ok_button = ctk.CTkButton(self, width=30, text="cancel", command=self.cancel)
-        self.ok_button.grid(row=2, column=1, sticky="we", padx=10, pady=5)
+        # Cancel button
+        self.cancel_button = QPushButton("cancel", self)
+        self.cancel_button.clicked.connect(self.cancel)
+        layout.addWidget(self.cancel_button, 2, 1, 1, 1)
 
         if default_value is not None:
-            self.entry.insert(0, default_value)
+            self.entry.setText(default_value)
 
     def ok(self):
-        if self.validate_callback is None or self.validate_callback(self.entry.get()):
-            self.callback(self.entry.get())
-            self.destroy()
+        text_val = self.entry.text()
+        if self.validate_callback is None or self.validate_callback(text_val):
+            self.callback(text_val)
+            self.close()
 
     def cancel(self):
-        self.destroy()
+        self.close()

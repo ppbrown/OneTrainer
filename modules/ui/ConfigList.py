@@ -1,3 +1,6 @@
+
+# This is a legacy class that has been migrated to OTConfigFrame
+
 import contextlib
 import copy
 import json

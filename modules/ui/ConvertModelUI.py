@@ -1,6 +1,14 @@
+
+# Util window under the "tools" tab
+
 import traceback
-from pathlib import Path
-from uuid import uuid4
+import os
+import uuid
+
+from PySide6.QtWidgets import (
+    QDialog, QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton, QFileDialog
+)
+from PySide6.QtCore import Qt
 
 from modules.util import create
 from modules.util.args.ConvertModelArgs import ConvertModelArgs
@@ -10,108 +18,131 @@ from modules.util.enum.ModelType import ModelType
 from modules.util.enum.TrainingMethod import TrainingMethod
 from modules.util.ModelNames import EmbeddingName, ModelNames
 from modules.util.torch_util import torch_gc
-from modules.util.ui import components
-from modules.util.ui.ui_utils import set_window_icon
 from modules.util.ui.UIState import UIState
 
-import customtkinter as ctk
 
+class ConvertModelUI(QDialog):
+    def __init__(self, parent=None, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
 
-class ConvertModelUI(ctk.CTkToplevel):
-    def __init__(self, parent, *args, **kwargs):
-        ctk.CTkToplevel.__init__(self, parent, *args, **kwargs)
-        self.parent = parent
+        self.setWindowTitle("Convert models")
+        self.resize(550, 350)
+        # self.setModal(False)  # if you want a non-blocking dialog
 
-        self.title("Convert models")
-        self.geometry("550x350")
-        self.resizable(True, True)
-        set_window_icon(self)
-        self.wait_visibility()
-        self.focus_set()
-
+        # Data / State
         self.convert_model_args = ConvertModelArgs.default_values()
         self.ui_state = UIState(self, self.convert_model_args)
 
-        self.frame = ctk.CTkFrame(self, width=600, height=300)
-        self.frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        # Main layout
+        self.layout_main = QGridLayout(self)
+        self.layout_main.setContentsMargins(10, 10, 10, 10)
+        self.layout_main.setSpacing(10)
+        self.setLayout(self.layout_main)
 
-        self.frame.grid_columnconfigure(0, weight=0)
-        self.frame.grid_columnconfigure(1, weight=1)
+        # Build the UI
+        self.__create_ui()
 
-        self.button = None
-        self.main_frame(self.frame)
+    def __create_ui(self):
+        """
+        Replaces your main_frame(...) method. We'll place the same fields in a QGridLayout.
+        """
 
-        self.frame.pack(fill="both", expand=True)
-        self.after(150, lambda: set_window_icon(self))
+        # 0) Model Type
+        lbl_model_type = QLabel("Model Type")
+        lbl_model_type.setToolTip("Type of the model")
+        self.layout_main.addWidget(lbl_model_type, 0, 0)
 
-    def main_frame(self, master):
-        # model type
-        components.label(master, 0, 0, "Model Type",
-                         tooltip="Type of the model")
-        components.options_kv(master, 0, 1, [
-            ("Stable Diffusion 1.5", ModelType.STABLE_DIFFUSION_15),
-            ("Stable Diffusion 1.5 Inpainting", ModelType.STABLE_DIFFUSION_15_INPAINTING),
-            ("Stable Diffusion 2.0", ModelType.STABLE_DIFFUSION_20),
-            ("Stable Diffusion 2.0 Inpainting", ModelType.STABLE_DIFFUSION_20_INPAINTING),
-            ("Stable Diffusion 2.1", ModelType.STABLE_DIFFUSION_21),
-            ("Stable Diffusion 3", ModelType.STABLE_DIFFUSION_3),
-            ("Stable Diffusion 3.5", ModelType.STABLE_DIFFUSION_35),
-            ("Stable Diffusion XL 1.0 Base", ModelType.STABLE_DIFFUSION_XL_10_BASE),
-            ("Stable Diffusion XL 1.0 Base Inpainting", ModelType.STABLE_DIFFUSION_XL_10_BASE_INPAINTING),
-            ("Wuerstchen v2", ModelType.WUERSTCHEN_2),
-            ("Stable Cascade", ModelType.STABLE_CASCADE_1),
-            ("PixArt Alpha", ModelType.PIXART_ALPHA),
-            ("PixArt Sigma", ModelType.PIXART_SIGMA),
-            ("Flux Dev", ModelType.FLUX_DEV_1),
-            ("Flux Fill Dev", ModelType.FLUX_FILL_DEV_1),
-            ("Hunyuan Video", ModelType.HUNYUAN_VIDEO),
-        ], self.ui_state, "model_type")
+        self.combo_model_type = QComboBox()
+        # Add items
+        self.combo_model_type.addItem("Stable Diffusion 1.5", ModelType.STABLE_DIFFUSION_15)
+        self.combo_model_type.addItem("Stable Diffusion 1.5 Inpainting", ModelType.STABLE_DIFFUSION_15_INPAINTING)
+        self.combo_model_type.addItem("Stable Diffusion 2.0", ModelType.STABLE_DIFFUSION_20)
+        self.combo_model_type.addItem("Stable Diffusion 2.0 Inpainting", ModelType.STABLE_DIFFUSION_20_INPAINTING)
+        self.combo_model_type.addItem("Stable Diffusion 2.1", ModelType.STABLE_DIFFUSION_21)
+        self.combo_model_type.addItem("Stable Diffusion 3", ModelType.STABLE_DIFFUSION_3)
+        self.combo_model_type.addItem("Stable Diffusion 3.5", ModelType.STABLE_DIFFUSION_35)
+        self.combo_model_type.addItem("Stable Diffusion XL 1.0 Base", ModelType.STABLE_DIFFUSION_XL_10_BASE)
+        self.combo_model_type.addItem("Stable Diffusion XL 1.0 Base Inpainting", ModelType.STABLE_DIFFUSION_XL_10_BASE_INPAINTING)
+        self.combo_model_type.addItem("Wuerstchen v2", ModelType.WUERSTCHEN_2)
+        self.combo_model_type.addItem("Stable Cascade", ModelType.STABLE_CASCADE_1)
+        self.combo_model_type.addItem("PixArt Alpha", ModelType.PIXART_ALPHA)
+        self.combo_model_type.addItem("PixArt Sigma", ModelType.PIXART_SIGMA)
+        self.combo_model_type.addItem("Flux Dev", ModelType.FLUX_DEV_1)
+        self.combo_model_type.addItem("Flux Fill Dev", ModelType.FLUX_FILL_DEV_1)
+        self.combo_model_type.addItem("Hunyuan Video", ModelType.HUNYUAN_VIDEO)
+        self.layout_main.addWidget(self.combo_model_type, 0, 1)
 
-        # training method
-        components.label(master, 1, 0, "Model Type",
-                         tooltip="The type of model to convert")
-        components.options_kv(master, 1, 1, [
-            ("Base Model", TrainingMethod.FINE_TUNE),
-            ("LoRA", TrainingMethod.LORA),
-            ("Embedding", TrainingMethod.EMBEDDING),
-        ], self.ui_state, "training_method")
+        # 1) Training method
+        lbl_training_method = QLabel("Model Type")
+        lbl_training_method.setToolTip("The type of model to convert")
+        self.layout_main.addWidget(lbl_training_method, 1, 0)
 
-        # input name
-        components.label(master, 2, 0, "Input name",
-                         tooltip="Filename, directory or hugging face repository of the base model")
-        components.file_entry(
-            master, 2, 1, self.ui_state, "input_name",
-            path_modifier=lambda x: Path(x).parent.absolute() if x.endswith(".json") else x
-        )
+        self.combo_training_method = QComboBox()
+        self.combo_training_method.addItem("Base Model", TrainingMethod.FINE_TUNE)
+        self.combo_training_method.addItem("LoRA", TrainingMethod.LORA)
+        self.combo_training_method.addItem("Embedding", TrainingMethod.EMBEDDING)
+        self.layout_main.addWidget(self.combo_training_method, 1, 1)
 
-        # output data type
-        components.label(master, 3, 0, "Output Data Type",
-                         tooltip="Precision to use when saving the output model")
-        components.options_kv(master, 3, 1, [
-            ("float32", DataType.FLOAT_32),
-            ("float16", DataType.FLOAT_16),
-            ("bfloat16", DataType.BFLOAT_16),
-        ], self.ui_state, "output_dtype")
+        # 2) Input name
+        lbl_input_name = QLabel("Input name")
+        lbl_input_name.setToolTip("Filename, directory or hugging face repository of the base model")
+        self.layout_main.addWidget(lbl_input_name, 2, 0)
 
-        # output format
-        components.label(master, 4, 0, "Output Format",
-                         tooltip="Format to use when saving the output model")
-        components.options_kv(master, 4, 1, [
-            ("Safetensors", ModelFormat.SAFETENSORS),
-            ("Diffusers", ModelFormat.DIFFUSERS),
-            ("Checkpoint", ModelFormat.CKPT),
-        ], self.ui_state, "output_model_format")
+        self.input_name_line = QLineEdit()
+        self.layout_main.addWidget(self.input_name_line, 2, 1)
 
-        # output model destination
-        components.label(master, 5, 0, "Model Output Destination",
-                         tooltip="Filename or directory where the output model is saved")
-        components.file_entry(master, 5, 1, self.ui_state, "output_model_destination", is_output=True)
+        # 3) Output data type
+        lbl_output_dtype = QLabel("Output Data Type")
+        lbl_output_dtype.setToolTip("Precision to use when saving the output model")
+        self.layout_main.addWidget(lbl_output_dtype, 3, 0)
 
-        self.button = components.button(master, 6, 1, "Convert", self.convert_model)
+        self.combo_output_dtype = QComboBox()
+        self.combo_output_dtype.addItem("float32", DataType.FLOAT_32)
+        self.combo_output_dtype.addItem("float16", DataType.FLOAT_16)
+        self.combo_output_dtype.addItem("bfloat16", DataType.BFLOAT_16)
+        self.layout_main.addWidget(self.combo_output_dtype, 3, 1)
+
+        # 4) Output format
+        lbl_output_fmt = QLabel("Output Format")
+        lbl_output_fmt.setToolTip("Format to use when saving the output model")
+        self.layout_main.addWidget(lbl_output_fmt, 4, 0)
+
+        self.combo_output_fmt = QComboBox()
+        self.combo_output_fmt.addItem("Safetensors", ModelFormat.SAFETENSORS)
+        self.combo_output_fmt.addItem("Diffusers", ModelFormat.DIFFUSERS)
+        self.combo_output_fmt.addItem("Checkpoint", ModelFormat.CKPT)
+        self.layout_main.addWidget(self.combo_output_fmt, 4, 1)
+
+        # 5) Output model destination
+        lbl_output_dest = QLabel("Model Output Destination")
+        lbl_output_dest.setToolTip("Filename or directory where the output model is saved")
+        self.layout_main.addWidget(lbl_output_dest, 5, 0)
+
+        self.output_dest_line = QLineEdit()
+        self.layout_main.addWidget(self.output_dest_line, 5, 1)
+
+        # 6) Convert button
+        self.button_convert = QPushButton("Convert")
+        self.button_convert.clicked.connect(self.convert_model)
+        self.layout_main.addWidget(self.button_convert, 6, 1)
 
     def convert_model(self):
+        """
+        Replicates your `convert_model(...)` logic, loading the model, saving,
+        handling exceptions, etc.
+        """
         try:
-            self.button.configure(state="disabled")
+            self.button_convert.setEnabled(False)
+
+            # Fill self.convert_model_args from UI
+            self.convert_model_args.model_type = self.combo_model_type.currentData()
+            self.convert_model_args.training_method = self.combo_training_method.currentData()
+            self.convert_model_args.input_name = self.input_name_line.text()
+            self.convert_model_args.output_dtype = self.combo_output_dtype.currentData()
+            self.convert_model_args.output_model_format = self.combo_output_fmt.currentData()
+            self.convert_model_args.output_model_destination = self.output_dest_line.text()
+
+            # Create model loader / saver
             model_loader = create.create_model_loader(
                 model_type=self.convert_model_args.model_type,
                 training_method=self.convert_model_args.training_method
@@ -121,38 +152,41 @@ class ConvertModelUI(ctk.CTkToplevel):
                 training_method=self.convert_model_args.training_method
             )
 
-            print("Loading model " + self.convert_model_args.input_name)
+            print(f"Loading model {self.convert_model_args.input_name}")
             if self.convert_model_args.training_method in [TrainingMethod.FINE_TUNE]:
                 model = model_loader.load(
                     model_type=self.convert_model_args.model_type,
                     model_names=ModelNames(
-                        base_model=self.convert_model_args.input_name,
+                        base_model=self.convert_model_args.input_name
                     ),
-                    weight_dtypes=self.convert_model_args.weight_dtypes(),
+                    weight_dtypes=self.convert_model_args.weight_dtypes()
                 )
             elif self.convert_model_args.training_method in [TrainingMethod.LORA, TrainingMethod.EMBEDDING]:
+                # in your code, you used a uuid4 for the embedding name
+                emb_name = str(uuid.uuid4())
                 model = model_loader.load(
                     model_type=self.convert_model_args.model_type,
                     model_names=ModelNames(
                         lora=self.convert_model_args.input_name,
-                        embedding=EmbeddingName(str(uuid4()), self.convert_model_args.input_name),
+                        embedding=EmbeddingName(emb_name, self.convert_model_args.input_name)
                     ),
-                    weight_dtypes=self.convert_model_args.weight_dtypes(),
+                    weight_dtypes=self.convert_model_args.weight_dtypes()
                 )
             else:
-                raise Exception("could not load model: " + self.convert_model_args.input_name)
+                raise Exception("Could not load model: " + self.convert_model_args.input_name)
 
-            print("Saving model " + self.convert_model_args.output_model_destination)
+            print(f"Saving model {self.convert_model_args.output_model_destination}")
             model_saver.save(
                 model=model,
                 model_type=self.convert_model_args.model_type,
                 output_model_format=self.convert_model_args.output_model_format,
                 output_model_destination=self.convert_model_args.output_model_destination,
-                dtype=self.convert_model_args.output_dtype.torch_dtype(),
+                dtype=self.convert_model_args.output_dtype.torch_dtype()
             )
             print("Model converted")
-        except Exception:
+
+        except Exception as e:
             traceback.print_exc()
 
         torch_gc()
-        self.button.configure(state="normal")
+        self.button_convert.setEnabled(True)

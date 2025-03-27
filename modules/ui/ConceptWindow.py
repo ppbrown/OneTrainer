@@ -1,49 +1,45 @@
-import math
-import multiprocessing
+
+# Window to edit properties of a single "concept" from the ConceptTab
+
 import os
 import pathlib
 import random
-import time
+import traceback
+
+import torch
+from PIL import Image
+from torchvision.transforms import functional
+
+from PySide6.QtWidgets import (
+    QDialog, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
+    QGridLayout, QLabel, QLineEdit, QCheckBox, QPushButton, QScrollArea,
+    QFrame, QPlainTextEdit
+)
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap, QImage
 
 from modules.util import path_util
 from modules.util.config.ConceptConfig import ConceptConfig
 from modules.util.enum.BalancingStrategy import BalancingStrategy
 from modules.util.ui import components
-from modules.util.ui.ui_utils import set_window_icon
 from modules.util.ui.UIState import UIState
-from scripts import concept_stats
 
+# mgds pipeline modules
 from mgds.LoadingPipeline import LoadingPipeline
 from mgds.OutputPipelineModule import OutputPipelineModule
 from mgds.PipelineModule import PipelineModule
 from mgds.pipelineModules.RandomBrightness import RandomBrightness
-from mgds.pipelineModules.RandomCircularMaskShrink import (
-    RandomCircularMaskShrink,
-)
+from mgds.pipelineModules.RandomCircularMaskShrink import RandomCircularMaskShrink
 from mgds.pipelineModules.RandomContrast import RandomContrast
 from mgds.pipelineModules.RandomFlip import RandomFlip
 from mgds.pipelineModules.RandomHue import RandomHue
 from mgds.pipelineModules.RandomMaskRotateCrop import RandomMaskRotateCrop
 from mgds.pipelineModules.RandomRotate import RandomRotate
 from mgds.pipelineModules.RandomSaturation import RandomSaturation
-from mgds.pipelineModuleTypes.RandomAccessPipelineModule import (
-    RandomAccessPipelineModule,
-)
-
-import torch
-from torchvision.transforms import functional
-
-import customtkinter as ctk
-from customtkinter import AppearanceModeTracker, ThemeManager
-from matplotlib import pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from PIL import Image
+from mgds.pipelineModuleTypes.RandomAccessPipelineModule import RandomAccessPipelineModule
 
 
-class InputPipelineModule(
-    PipelineModule,
-    RandomAccessPipelineModule,
-):
+class InputPipelineModule(PipelineModule, RandomAccessPipelineModule):
     def __init__(self, data: dict):
         super().__init__()
         self.data = data
@@ -61,18 +57,18 @@ class InputPipelineModule(
         return self.data
 
 
-class ConceptWindow(ctk.CTkToplevel):
+class ConceptWindow(QDialog):
     def __init__(
-            self,
-            parent,
-            concept: ConceptConfig,
-            ui_state: UIState,
-            image_ui_state: UIState,
-            text_ui_state: UIState,
-            *args, **kwargs,
+        self,
+        parent,
+        concept,
+        ui_state: UIState,
+        image_ui_state: UIState,
+        text_ui_state: UIState,
+        *args,
+        **kwargs
     ):
-        ctk.CTkToplevel.__init__(self, parent, *args, **kwargs)
-
+        super().__init__()
         self.concept = concept
         self.ui_state = ui_state
         self.image_ui_state = image_ui_state
@@ -80,444 +76,319 @@ class ConceptWindow(ctk.CTkToplevel):
 
         self.image_preview_file_index = 0
 
-        self.title("Concept")
-        self.geometry("800x700")
-        self.resizable(True, True)
-        set_window_icon(self)
-        self.wait_visibility()
-        self.grab_set()
-        self.focus_set()
+        # Setup QDialog
+        self.setWindowTitle("Concept")
+        self.resize(800, 700)
+        # For a blocking dialog, you'd do self.setModal(True)
 
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(0, weight=1)
+        # Main layout for the entire dialog
+        self.main_layout = QGridLayout(self)
+        self.main_layout.setContentsMargins(5, 5, 5, 5)
+        self.main_layout.setSpacing(5)
+        self.setLayout(self.main_layout)
 
-        tabview = ctk.CTkTabview(self)
-        tabview.grid(row=0, column=0, sticky="nsew")
+        # QTabWidget in row=0
+        self.tabview = QTabWidget(self)
+        self.main_layout.addWidget(self.tabview, 0, 0, 1, 1)
 
-        self.general_tab = self.__general_tab(tabview.add("general"), concept)
-        self.image_augmentation_tab = self.__image_augmentation_tab(tabview.add("image augmentation"))
-        self.text_augmentation_tab = self.__text_augmentation_tab(tabview.add("text augmentation"))
-        self.concept_stats_tab = self.__concept_stats_tab(tabview.add("statistics"))
+        # Add tabs
+        self.general_tab_widget = QWidget()
+        self.tabview.addTab(self.general_tab_widget, "general")
 
-        #automatically get concept stats if required, or read from concept config
-        self.__auto_update_concept_stats()
+        self.image_augmentation_widget = QWidget()
+        self.tabview.addTab(self.image_augmentation_widget, "image augmentation")
 
-        components.button(self, 1, 0, "ok", self.__ok)
-        self.after(150, lambda: set_window_icon(self))
+        self.text_augmentation_widget = QWidget()
+        self.tabview.addTab(self.text_augmentation_widget, "text augmentation")
 
-    def __general_tab(self, master, concept: ConceptConfig):
-        frame = ctk.CTkScrollableFrame(master, fg_color="transparent")
-        frame.grid_columnconfigure(1, weight=1)
-        frame.grid_columnconfigure(2, weight=1)
+        # Build each tab
+        self.__general_tab(self.general_tab_widget)
+        self.__image_augmentation_tab(self.image_augmentation_widget)
+        self.__text_augmentation_tab(self.text_augmentation_widget)
+
+        # "OK" button at row=1
+        self.ok_button = QPushButton("ok", self)
+        self.ok_button.clicked.connect(self.__ok)
+        self.main_layout.addWidget(self.ok_button, 1, 0, 1, 1, alignment=Qt.AlignRight)
+
+    def __general_tab(self, master: QWidget):
+        """
+        Replaces your ctk.CTkScrollableFrame with a QScrollArea,
+        then place everything in a QGridLayout inside.
+        """
+        # QScrollArea
+        scroll_area = QScrollArea(master)
+        scroll_area.setWidgetResizable(True)
+        layout_master = QVBoxLayout(master)
+        layout_master.setContentsMargins(0,0,0,0)
+        layout_master.setSpacing(5)
+        master.setLayout(layout_master)
+        layout_master.addWidget(scroll_area)
+
+        # Container inside the scroll
+        container = QFrame()
+        container_layout = QGridLayout(container)
+        container_layout.setContentsMargins(5,5,5,5)
+        container_layout.setSpacing(5)
+        container.setLayout(container_layout)
+        scroll_area.setWidget(container)
 
         # name
-        components.label(frame, 0, 0, "Name",
-                         tooltip="Name of the concept")
-        components.entry(frame, 0, 1, self.ui_state, "name")
+        components.label(container, 0, 0, "Name", tooltip="Name of the concept")
+        components.entry(container, 0, 1, self.ui_state, "name")
 
         # enabled
-        components.label(frame, 1, 0, "Enabled",
-                         tooltip="Enable or disable this concept")
-        components.switch(frame, 1, 1, self.ui_state, "enabled")
+        components.label(container, 1, 0, "Enabled", tooltip="Enable or disable this concept")
+        components.switch(container, 1, 1, self.ui_state, "enabled")
 
         # validation_concept
-        components.label(frame, 2, 0, "Validation concept",
-                         tooltip="Use concept for validation instead of training")
-        components.switch(frame, 2, 1, self.ui_state, "validation_concept")
+        components.label(container, 2, 0, "Validation concept", tooltip="Use concept for validation instead of training")
+        components.switch(container, 2, 1, self.ui_state, "validation_concept")
 
         # path
-        components.label(frame, 3, 0, "Path",
-                         tooltip="Path where the training data is located")
-        components.dir_entry(frame, 3, 1, self.ui_state, "path")
+        components.label(container, 3, 0, "Path", tooltip="Path for training data")
+        components.dir_entry(container, 3, 1, self.ui_state, "path")
 
         # prompt source
-        components.label(frame, 4, 0, "Prompt Source",
-                         tooltip="The source for prompts used during training. When selecting \"From single text file\", select a text file that contains a list of prompts")
-        prompt_path_entry = components.file_entry(frame, 4, 2, self.text_ui_state, "prompt_path")
+        components.label(container, 4, 0, "Prompt Source",
+                         tooltip="The source of prompts used. 'From text file per sample', etc.")
+        prompt_path_entry = components.file_entry(container, 4, 2, self.text_ui_state, "prompt_path")
 
         def set_prompt_path_entry_enabled(option: str):
-            if option == 'concept':
-                for child in prompt_path_entry.children.values():
-                    child.configure(state="normal")
-            else:
-                for child in prompt_path_entry.children.values():
-                    child.configure(state="disabled")
+            # Enable the file entry's sub-widgets only if 'concept' is chosen.
+            for child in prompt_path_entry.children():
+                child.setEnabled(option == 'concept')
 
-        components.options_kv(frame, 4, 1, [
-            ("From text file per sample", 'sample'),
-            ("From single text file", 'concept'),
-            ("From image file name", 'filename'),
-        ], self.text_ui_state, "prompt_source", command=set_prompt_path_entry_enabled)
-        set_prompt_path_entry_enabled(concept.text.prompt_source)
+
+        components.options_kv(
+            container, 4, 1,
+            [
+                ("From text file per sample", 'sample'),
+                ("From single text file", 'concept'),
+                ("From image file name", 'filename'),
+            ],
+            self.text_ui_state, "prompt_source", command=set_prompt_path_entry_enabled
+        )
+        set_prompt_path_entry_enabled(self.concept.text.prompt_source)
 
         # include subdirectories
-        components.label(frame, 5, 0, "Include Subdirectories",
-                         tooltip="Includes images from subdirectories into the dataset")
-        components.switch(frame, 5, 1, self.ui_state, "include_subdirectories")
+        components.label(container, 5, 0, "Include Subdirectories")
+        components.switch(container, 5, 1, self.ui_state, "include_subdirectories")
 
         # image variations
-        components.label(frame, 6, 0, "Image Variations",
-                         tooltip="The number of different image versions to cache if latent caching is enabled.")
-        components.entry(frame, 6, 1, self.ui_state, "image_variations")
+        components.label(container, 6, 0, "Image Variations")
+        components.entry(container, 6, 1, self.ui_state, "image_variations")
 
         # text variations
-        components.label(frame, 7, 0, "Text Variations",
-                         tooltip="The number of different text versions to cache if latent caching is enabled.")
-        components.entry(frame, 7, 1, self.ui_state, "text_variations")
+        components.label(container, 7, 0, "Text Variations")
+        components.entry(container, 7, 1, self.ui_state, "text_variations")
 
         # balancing
-        components.label(frame, 8, 0, "Balancing",
-                         tooltip="The number of samples used during training. Use repeats to multiply the concept, or samples to specify an exact number of samples used in each epoch.")
-        components.entry(frame, 8, 1, self.ui_state, "balancing")
-        components.options(frame, 8, 2, [str(x) for x in list(BalancingStrategy)], self.ui_state, "balancing_strategy")
+        components.label(container, 8, 0, "Balancing")
+        components.entry(container, 8, 1, self.ui_state, "balancing")
+        components.options(container, 8, 2, [str(x) for x in list(BalancingStrategy)], self.ui_state, "balancing_strategy")
 
         # loss weight
-        components.label(frame, 9, 0, "Loss Weight",
-                         tooltip="The loss multiplyer for this concept.")
-        components.entry(frame, 9, 1, self.ui_state, "loss_weight")
+        components.label(container, 9, 0, "Loss Weight")
+        components.entry(container, 9, 1, self.ui_state, "loss_weight")
 
-        frame.pack(fill="both", expand=1)
-        return frame
+    def __image_augmentation_tab(self, master: QWidget):
+        """
+        Window with with a grid for the 'Random' and 'Fixed' columns, plus an image preview.
+        """
+        scroll_area = QScrollArea(master)
+        scroll_area.setWidgetResizable(True)
+        layout_master = QVBoxLayout(master)
+        layout_master.setContentsMargins(0,0,0,0)
+        layout_master.setSpacing(5)
+        master.setLayout(layout_master)
+        layout_master.addWidget(scroll_area)
 
-    def __image_augmentation_tab(self, master):
-        frame = ctk.CTkScrollableFrame(master, fg_color="transparent")
-        frame.grid_columnconfigure(0, weight=0)
-        frame.grid_columnconfigure(1, weight=0)
-        frame.grid_columnconfigure(2, weight=0)
-        frame.grid_columnconfigure(3, weight=1)
+        container = QFrame()
+        container_layout = QGridLayout(container)
+        container_layout.setContentsMargins(5,5,5,5)
+        container_layout.setSpacing(5)
+        container.setLayout(container_layout)
+        scroll_area.setWidget(container)
 
         # header
-        components.label(frame, 0, 1, "Random",
-                         tooltip="Enable this augmentation with random values")
-        components.label(frame, 0, 2, "Fixed",
-                         tooltip="Enable this augmentation with fixed values")
+        components.label(container, 0, 1, "Random")
+        components.label(container, 0, 2, "Fixed")
 
         # crop jitter
-        components.label(frame, 1, 0, "Crop Jitter",
-                         tooltip="Enables random cropping of samples")
-        components.switch(frame, 1, 1, self.image_ui_state, "enable_crop_jitter")
+        components.label(container, 1, 0, "Crop Jitter")
+        components.switch(container, 1, 1, self.image_ui_state, "enable_crop_jitter")
 
         # random flip
-        components.label(frame, 2, 0, "Random Flip",
-                         tooltip="Randomly flip the sample during training")
-        components.switch(frame, 2, 1, self.image_ui_state, "enable_random_flip")
-        components.switch(frame, 2, 2, self.image_ui_state, "enable_fixed_flip")
+        components.label(container, 2, 0, "Random Flip")
+        components.switch(container, 2, 1, self.image_ui_state, "enable_random_flip")
+        components.switch(container, 2, 2, self.image_ui_state, "enable_fixed_flip")
 
-        # random rotation
-        components.label(frame, 3, 0, "Random Rotation",
-                         tooltip="Randomly rotates the sample during training")
-        components.switch(frame, 3, 1, self.image_ui_state, "enable_random_rotate")
-        components.switch(frame, 3, 2, self.image_ui_state, "enable_fixed_rotate")
-        components.entry(frame, 3, 3, self.image_ui_state, "random_rotate_max_angle")
+        # random rotate
+        components.label(container, 3, 0, "Random Rotation")
+        components.switch(container, 3, 1, self.image_ui_state, "enable_random_rotate")
+        components.switch(container, 3, 2, self.image_ui_state, "enable_fixed_rotate")
+        components.entry(container, 3, 3, self.image_ui_state, "random_rotate_max_angle")
 
-        # random brightness
-        components.label(frame, 4, 0, "Random Brightness",
-                         tooltip="Randomly adjusts the brightness of the sample during training")
-        components.switch(frame, 4, 1, self.image_ui_state, "enable_random_brightness")
-        components.switch(frame, 4, 2, self.image_ui_state, "enable_fixed_brightness")
-        components.entry(frame, 4, 3, self.image_ui_state, "random_brightness_max_strength")
+        # brightness
+        components.label(container, 4, 0, "Random Brightness")
+        components.switch(container, 4, 1, self.image_ui_state, "enable_random_brightness")
+        components.switch(container, 4, 2, self.image_ui_state, "enable_fixed_brightness")
+        components.entry(container, 4, 3, self.image_ui_state, "random_brightness_max_strength")
 
-        # random contrast
-        components.label(frame, 5, 0, "Random Contrast",
-                         tooltip="Randomly adjusts the contrast of the sample during training")
-        components.switch(frame, 5, 1, self.image_ui_state, "enable_random_contrast")
-        components.switch(frame, 5, 2, self.image_ui_state, "enable_fixed_contrast")
-        components.entry(frame, 5, 3, self.image_ui_state, "random_contrast_max_strength")
+        # contrast
+        components.label(container, 5, 0, "Random Contrast")
+        components.switch(container, 5, 1, self.image_ui_state, "enable_random_contrast")
+        components.switch(container, 5, 2, self.image_ui_state, "enable_fixed_contrast")
+        components.entry(container, 5, 3, self.image_ui_state, "random_contrast_max_strength")
 
-        # random saturation
-        components.label(frame, 6, 0, "Random Saturation",
-                         tooltip="Randomly adjusts the saturation of the sample during training")
-        components.switch(frame, 6, 1, self.image_ui_state, "enable_random_saturation")
-        components.switch(frame, 6, 2, self.image_ui_state, "enable_fixed_saturation")
-        components.entry(frame, 6, 3, self.image_ui_state, "random_saturation_max_strength")
+        # saturation
+        components.label(container, 6, 0, "Random Saturation")
+        components.switch(container, 6, 1, self.image_ui_state, "enable_random_saturation")
+        components.switch(container, 6, 2, self.image_ui_state, "enable_fixed_saturation")
+        components.entry(container, 6, 3, self.image_ui_state, "random_saturation_max_strength")
 
-        # random hue
-        components.label(frame, 7, 0, "Random Hue",
-                         tooltip="Randomly adjusts the hue of the sample during training")
-        components.switch(frame, 7, 1, self.image_ui_state, "enable_random_hue")
-        components.switch(frame, 7, 2, self.image_ui_state, "enable_fixed_hue")
-        components.entry(frame, 7, 3, self.image_ui_state, "random_hue_max_strength")
+        # hue
+        components.label(container, 7, 0, "Random Hue")
+        components.switch(container, 7, 1, self.image_ui_state, "enable_random_hue")
+        components.switch(container, 7, 2, self.image_ui_state, "enable_fixed_hue")
+        components.entry(container, 7, 3, self.image_ui_state, "random_hue_max_strength")
 
-        # random circular mask shrink
-        components.label(frame, 8, 0, "Circular Mask Generation",
-                         tooltip="Automatically create circular masks for masked training")
-        components.switch(frame, 8, 1, self.image_ui_state, "enable_random_circular_mask_shrink")
+        # circular mask shrink
+        components.label(container, 8, 0, "Circular Mask Generation")
+        components.switch(container, 8, 1, self.image_ui_state, "enable_random_circular_mask_shrink")
 
-        # random rotate and crop
-        components.label(frame, 9, 0, "Random Rotate and Crop",
-                         tooltip="Randomly rotate the training samples and crop to the masked region")
-        components.switch(frame, 9, 1, self.image_ui_state, "enable_random_mask_rotate_crop")
+        # random rotate/crop
+        components.label(container, 9, 0, "Random Rotate and Crop")
+        components.switch(container, 9, 1, self.image_ui_state, "enable_random_mask_rotate_crop")
 
-        # circular mask generation
-        components.label(frame, 10, 0, "Resolution Override",
-                         tooltip="Override the resolution for this concept. Optionally specify multiple resolutions separated by a comma, or a single exact resolution in the format <width>x<height>")
-        components.switch(frame, 10, 2, self.image_ui_state, "enable_resolution_override")
-        components.entry(frame, 10, 3, self.image_ui_state, "resolution_override")
+        # resolution override
+        components.label(container, 10, 0, "Resolution Override")
+        components.switch(container, 10, 2, self.image_ui_state, "enable_resolution_override")
+        components.entry(container, 10, 3, self.image_ui_state, "resolution_override")
 
-        # image
+        # image preview 
         image_preview, filename_preview, caption_preview = self.__get_preview_image()
-        self.image = ctk.CTkImage(
-            light_image=image_preview,
-            size=image_preview.size,
-        )
-        image_label = ctk.CTkLabel(master=frame, text="", image=self.image, height=300, width=300)
-        image_label.grid(row=0, column=4, rowspan=6)
+        self.preview_pixmap = self.__pil_to_qpixmap(image_preview)
 
-        # refresh preview
-        update_button_frame = ctk.CTkFrame(master=frame, corner_radius=0, fg_color="transparent")
-        update_button_frame.grid(row=6, column=4, sticky="nsew")
-        update_button_frame.grid_columnconfigure(1, weight=1)
+        self.image_label = QLabel(container)
+        self.image_label.setPixmap(self.preview_pixmap)
+        self.image_label.setFixedSize(min(image_preview.width,300), min(image_preview.height,300))
+        self.image_label.setScaledContents(True)
+        container_layout.addWidget(self.image_label, 0, 4, 6, 1)  # row=0..5
 
-        prev_preview_button = components.button(update_button_frame, 0, 0, "<", command=self.__prev_image_preview)
-        components.button(update_button_frame, 0, 1, "Update Preview", command=self.__update_image_preview)
-        next_preview_button = components.button(update_button_frame, 0, 2, ">", command=self.__next_image_preview)
+        # refresh preview buttons
+        update_button_frame = QFrame(container)
+        update_button_layout = QGridLayout(update_button_frame)
+        update_button_layout.setContentsMargins(0,0,0,0)
+        update_button_layout.setSpacing(5)
+        update_button_frame.setLayout(update_button_layout)
+        container_layout.addWidget(update_button_frame, 6, 4, 1, 1)
 
-        prev_preview_button.configure(width=40)
-        next_preview_button.configure(width=40)
+        self.prev_preview_button = QPushButton("<", update_button_frame)
+        self.prev_preview_button.setFixedWidth(40)
+        self.prev_preview_button.clicked.connect(self.__prev_image_preview)
+        update_button_layout.addWidget(self.prev_preview_button, 0, 0)
 
-        #caption and filename preview
-        self.filename_preview = ctk.CTkLabel(master=frame, text=filename_preview, width=300, anchor="nw", justify="left", padx=10, wraplength=280)
-        self.filename_preview.grid(row=7, column=4)
-        self.caption_preview = ctk.CTkTextbox(master=frame, width = 300, height = 150, wrap="word", border_width=2)
-        self.caption_preview.insert(index="1.0", text=caption_preview)
-        self.caption_preview.configure(state="disabled")
-        self.caption_preview.grid(row=8, column=4, rowspan = 4)
+        self.update_preview_button = QPushButton("Update Preview", update_button_frame)
+        self.update_preview_button.clicked.connect(self.__update_image_preview)
+        update_button_layout.addWidget(self.update_preview_button, 0, 1)
 
-        frame.pack(fill="both", expand=1)
-        return frame
+        self.next_preview_button = QPushButton(">", update_button_frame)
+        self.next_preview_button.setFixedWidth(40)
+        self.next_preview_button.clicked.connect(self.__next_image_preview)
+        update_button_layout.addWidget(self.next_preview_button, 0, 2)
 
-    def __text_augmentation_tab(self, master):
-        frame = ctk.CTkScrollableFrame(master, fg_color="transparent")
-        frame.grid_columnconfigure(0, weight=0)
-        frame.grid_columnconfigure(1, weight=0)
-        frame.grid_columnconfigure(2, weight=0)
-        frame.grid_columnconfigure(3, weight=1)
+        # filename preview
+        self.filename_preview_label = QLabel(container)
+        self.filename_preview_label.setText(filename_preview)
+        self.filename_preview_label.setFixedWidth(300)
+        container_layout.addWidget(self.filename_preview_label, 7, 4, 1, 1)
+
+        # caption preview
+        self.caption_preview = QPlainTextEdit(container)
+        self.caption_preview.setFixedSize(300, 150)
+        self.caption_preview.setReadOnly(True)
+        self.caption_preview.insertPlainText(caption_preview)
+        container_layout.addWidget(self.caption_preview, 8, 4, 4, 1)
+
+    def __text_augmentation_tab(self, master: QWidget):
+        """
+        Another QScrollArea with a container that has a QGridLayout for text augmentation controls.
+        """
+        scroll_area = QScrollArea(master)
+        scroll_area.setWidgetResizable(True)
+        layout_master = QVBoxLayout(master)
+        layout_master.setContentsMargins(0,0,0,0)
+        layout_master.setSpacing(5)
+        master.setLayout(layout_master)
+        layout_master.addWidget(scroll_area)
+
+        container = QFrame()
+        container_layout = QGridLayout(container)
+        container_layout.setContentsMargins(5,5,5,5)
+        container_layout.setSpacing(5)
+        container.setLayout(container_layout)
+        scroll_area.setWidget(container)
 
         # tag shuffling
-        components.label(frame, 0, 0, "Tag Shuffling",
-                         tooltip="Enables tag shuffling")
-        components.switch(frame, 0, 1, self.text_ui_state, "enable_tag_shuffling")
+        components.label(container, 0, 0, "Tag Shuffling")
+        components.switch(container, 0, 1, self.text_ui_state, "enable_tag_shuffling")
 
-        # keep tag count
-        components.label(frame, 1, 0, "Tag Delimiter",
-                         tooltip="The delimiter between tags")
-        components.entry(frame, 1, 1, self.text_ui_state, "tag_delimiter")
+        # tag delimiter
+        components.label(container, 1, 0, "Tag Delimiter")
+        components.entry(container, 1, 1, self.text_ui_state, "tag_delimiter")
 
-        # keep tag count
-        components.label(frame, 2, 0, "Keep Tag Count",
-                         tooltip="The number of tags at the start of the caption that are not shuffled or dropped")
-        components.entry(frame, 2, 1, self.text_ui_state, "keep_tags_count")
+        # keep_tags_count
+        components.label(container, 2, 0, "Keep Tag Count")
+        components.entry(container, 2, 1, self.text_ui_state, "keep_tags_count")
 
         # tag dropout
-        components.label(frame, 3, 0, "Tag Dropout",
-                         tooltip="Enables random dropout for tags in the captions.")
-        components.switch(frame, 3, 1, self.text_ui_state, "tag_dropout_enable")
-        components.label(frame, 4, 0, "Dropout Mode",
-                         tooltip="Method used to drop captions. 'Full' will drop the entire caption past the 'kept' tags with a certain probability, 'Random' will drop individual tags with the set probability, and 'Random Weighted' will linearly increase the probability of dropping tags, more likely to preseve tags near the front with full probability to drop at the end.")
-        components.options_kv(frame, 4, 1, [
-            ("Full", 'FULL'),
-            ("Random", 'RANDOM'),
-            ("Random Weighted", 'RANDOM WEIGHTED'),
-        ], self.text_ui_state, "tag_dropout_mode", None)
-        components.label(frame, 4, 2, "Probability",
-                         tooltip="Probability to drop tags, from 0 to 1.")
-        components.entry(frame, 4, 3, self.text_ui_state, "tag_dropout_probability")
+        components.label(container, 3, 0, "Tag Dropout")
+        components.switch(container, 3, 1, self.text_ui_state, "tag_dropout_enable")
 
-        components.label(frame, 5, 0, "Special Dropout Tags",
-                         tooltip="List of tags which will be whitelisted/blacklisted by dropout. 'Whitelist' tags will never be dropped but all others may be, 'Blacklist' tags may be dropped but all others will never be, 'None' may drop any tags. Can specify either a delimiter-separated list in the field, or a file path to a .txt or .csv file with entries separated by newlines.")
-        components.options_kv(frame, 5, 1, [
-            ("None", 'NONE'),
-            ("Blacklist", 'BLACKLIST'),
-            ("Whitelist", 'WHITELIST'),
-        ], self.text_ui_state, "tag_dropout_special_tags_mode", None)
-        components.entry(frame, 5, 2, self.text_ui_state, "tag_dropout_special_tags")
-        components.label(frame, 6, 0, "Special Tags Regex",
-                         tooltip="Interpret special tags with regex, such as 'photo.*' to match 'photo, photograph, photon' but not 'telephoto'. Includes exception for '/(' and '/)' syntax found in many booru/e6 tags.")
-        components.switch(frame, 6, 1, self.text_ui_state, "tag_dropout_special_tags_regex")
+        # dropout mode
+        components.label(container, 4, 0, "Dropout Mode")
+        components.options_kv(
+            container, 4, 1,
+            [
+                ("Full", 'FULL'),
+                ("Random", 'RANDOM'),
+                ("Random Weighted", 'RANDOM WEIGHTED'),
+            ],
+            self.text_ui_state, "tag_dropout_mode", None
+        )
+        components.label(container, 4, 2, "Probability")
+        components.entry(container, 4, 3, self.text_ui_state, "tag_dropout_probability")
 
-        #capitalization randomization
-        components.label(frame, 7, 0, "Randomize Capitalization",
-                         tooltip="Enables randomization of capitalization for tags in the caption.")
-        components.switch(frame, 7, 1, self.text_ui_state, "caps_randomize_enable")
-        components.label(frame, 7, 2, "Force Lowercase",
-                         tooltip="If enabled, converts the caption to lowercase before any further processing.")
-        components.switch(frame, 7, 3, self.text_ui_state, "caps_randomize_lowercase")
+        # special dropout tags
+        components.label(container, 5, 0, "Special Dropout Tags")
+        components.options_kv(
+            container, 5, 1,
+            [
+                ("None", 'NONE'),
+                ("Blacklist", 'BLACKLIST'),
+                ("Whitelist", 'WHITELIST'),
+            ],
+            self.text_ui_state, "tag_dropout_special_tags_mode", None
+        )
+        components.entry(container, 5, 2, self.text_ui_state, "tag_dropout_special_tags")
 
-        components.label(frame, 8, 0, "Captialization Mode",
-                         tooltip="Comma-separated list of types of capitalization randomization to perform. 'capslock' for ALL CAPS, 'title' for First Letter Of Every Word, 'first' for First word only, 'random' for rAndOMiZeD lEtTERs.")
-        components.entry(frame, 8, 1, self.text_ui_state, "caps_randomize_mode")
-        components.label(frame, 8, 2, "Probability",
-                         tooltip="Probability to randomize capitialization of each tag, from 0 to 1.")
-        components.entry(frame, 8, 3, self.text_ui_state, "caps_randomize_probability")
+        # special tags regex
+        components.label(container, 6, 0, "Special Tags Regex")
+        components.switch(container, 6, 1, self.text_ui_state, "tag_dropout_special_tags_regex")
 
-        frame.pack(fill="both", expand=1)
-        return frame
+        # randomize capitalization
+        components.label(container, 7, 0, "Randomize Capitalization")
+        components.switch(container, 7, 1, self.text_ui_state, "caps_randomize_enable")
+        components.label(container, 7, 2, "Force Lowercase")
+        components.switch(container, 7, 3, self.text_ui_state, "caps_randomize_lowercase")
 
-    def __concept_stats_tab(self, master):
-        frame = ctk.CTkScrollableFrame(master, fg_color="transparent")
-        frame.grid_columnconfigure(0, weight=0, minsize=150)
-        frame.grid_columnconfigure(1, weight=0, minsize=150)
-        frame.grid_columnconfigure(2, weight=0, minsize=150)
-        frame.grid_columnconfigure(3, weight=0, minsize=150)
-
-        self.cancel_scan_flag = multiprocessing.Event()
-
-        #file size
-        self.file_size_label = components.label(frame, 1, 0, "Total Size", pad=0,
-                         tooltip="Total size of all image, mask, and caption files in MB")
-        self.file_size_label.configure(font=ctk.CTkFont(underline=True))
-        self.file_size_preview = components.label(frame, 2, 0, pad=0, text="-")
-
-        #subdirectory count
-        self.dir_count_label = components.label(frame, 1, 1, "Directories", pad=0,
-                         tooltip="Total number of directories including and under (if 'include subdirectories' is enabled) the main concept directory")
-        self.dir_count_label.configure(font=ctk.CTkFont(underline=True))
-        self.dir_count_preview = components.label(frame, 2, 1, pad=0, text="-")
-
-        #basic img/vid stats - count of each type in the concept
-        #the \n at the start of the label gives it better vertical spacing with other rows
-        self.image_count_label = components.label(frame, 3, 0, "\nTotal Images", pad=0,
-                         tooltip="Total number of image files, any of the extensions " + str(path_util.SUPPORTED_IMAGE_EXTENSIONS) + ", excluding '-masklabel.png'")
-        self.image_count_label.configure(font=ctk.CTkFont(underline=True))
-        self.image_count_preview = components.label(frame, 4, 0, pad=0, text="-")
-        self.video_count_label = components.label(frame, 3, 1, "\nTotal Videos", pad=0,
-                         tooltip="Total number of video files, any of the extensions " + str(path_util.SUPPORTED_VIDEO_EXTENSIONS))
-        self.video_count_label.configure(font=ctk.CTkFont(underline=True))
-        self.video_count_preview = components.label(frame, 4, 1, pad=0, text="-")
-        self.mask_count_label = components.label(frame, 3, 2, "\nTotal Masks", pad=0,
-                         tooltip="Total number of mask files, any file ending in '-masklabel.png'")
-        self.mask_count_label.configure(font=ctk.CTkFont(underline=True))
-        self.mask_count_preview = components.label(frame, 4, 2, pad=0, text="-")
-        self.caption_count_label = components.label(frame, 3, 3, "\nTotal Captions", pad=0,
-                         tooltip="Total number of caption files, any .txt file")
-        self.caption_count_label.configure(font=ctk.CTkFont(underline=True))
-        self.caption_count_preview = components.label(frame, 4, 3, pad=0, text="-")
-
-        #advanced img/vid stats - how many img/vid files have a mask or caption of the same name
-        self.image_count_mask_label = components.label(frame, 5, 0, "\nImages with Masks", pad=0,
-                         tooltip="Total number of image files with an associated mask")
-        self.image_count_mask_label.configure(font=ctk.CTkFont(underline=True))
-        self.image_count_mask_preview = components.label(frame, 6, 0, pad=0, text="-")
-        self.mask_count_label_unpaired = components.label(frame, 5, 1, "\nUnpaired Masks", pad=0,
-                         tooltip="Total number of mask files which lack a corresponding image file - if >0, check your data set!")
-        self.mask_count_label_unpaired.configure(font=ctk.CTkFont(underline=True))
-        self.mask_count_preview_unpaired = components.label(frame, 6, 1, pad=0, text="-")
-        #currently no masks for videos?
-
-        self.image_count_caption_label = components.label(frame, 7, 0, "\nImages with Captions", pad=0,
-                         tooltip="Total number of image files with an associated caption")
-        self.image_count_caption_label.configure(font=ctk.CTkFont(underline=True))
-        self.image_count_caption_preview = components.label(frame, 8, 0, pad=0, text="-")
-        self.video_count_caption_label = components.label(frame, 7, 1, "\nVideos with Captions", pad=0,
-                         tooltip="Total number of video files with an associated caption")
-        self.video_count_caption_label.configure(font=ctk.CTkFont(underline=True))
-        self.video_count_caption_preview = components.label(frame, 8, 1, pad=0, text="-")
-        self.caption_count_label_unpaired = components.label(frame, 7, 2, "\nUnpaired Captions", pad=0,
-                         tooltip="Total number of caption files which lack a corresponding image file - if >0, check your data set! If using 'from file name' or 'from single text file' then this can be ignored.")
-        self.caption_count_label_unpaired.configure(font=ctk.CTkFont(underline=True))
-        self.caption_count_preview_unpaired = components.label(frame, 8, 2, pad=0, text="-")
-
-        #resolution info
-        self.pixel_max_label = components.label(frame, 9, 0, "\nMax Pixels", pad=0,
-                         tooltip="Largest image in the concept by number of pixels (width * height)")
-        self.pixel_max_label.configure(font=ctk.CTkFont(underline=True))
-        self.pixel_max_preview = components.label(frame, 10, 0, pad=0, text="-", wraplength=150)
-        self.pixel_avg_label = components.label(frame, 9, 1, "\nAvg Pixels", pad=0,
-                         tooltip="Average size of images in the concept by number of pixels (width * height)")
-        self.pixel_avg_label.configure(font=ctk.CTkFont(underline=True))
-        self.pixel_avg_preview = components.label(frame, 10, 1, pad=0, text="-", wraplength=150)
-        self.pixel_min_label = components.label(frame, 9, 2, "\nMin Pixels", pad=0,
-                         tooltip="Smallest image in the concept by number of pixels (width * height)")
-        self.pixel_min_label.configure(font=ctk.CTkFont(underline=True))
-        self.pixel_min_preview = components.label(frame, 10, 2, pad=0, text="-", wraplength=150)
-
-        #video length info
-        self.length_max_label = components.label(frame, 11, 0, "\nMax Length", pad=0,
-                         tooltip="Longest video in the concept by number of frames")
-        self.length_max_label.configure(font=ctk.CTkFont(underline=True))
-        self.length_max_preview = components.label(frame, 12, 0, pad=0, text="-", wraplength=150)
-        self.length_avg_label = components.label(frame, 11, 1, "\nAvg Length", pad=0,
-                         tooltip="Average length of videos in the concept by number of frames")
-        self.length_avg_label.configure(font=ctk.CTkFont(underline=True))
-        self.length_avg_preview = components.label(frame, 12, 1, pad=0, text="-", wraplength=150)
-        self.length_min_label = components.label(frame, 11, 2, "\nMin Length", pad=0,
-                         tooltip="Shortest video in the concept by number of frames")
-        self.length_min_label.configure(font=ctk.CTkFont(underline=True))
-        self.length_min_preview = components.label(frame, 12, 2, pad=0, text="-", wraplength=150)
-
-        #video fps info
-        self.fps_max_label = components.label(frame, 13, 0, "\nMax FPS", pad=0,
-                         tooltip="Video in concept with highest fps")
-        self.fps_max_label.configure(font=ctk.CTkFont(underline=True))
-        self.fps_max_preview = components.label(frame, 14, 0, pad=0, text="-", wraplength=150)
-        self.fps_avg_label = components.label(frame, 13, 1, "\nAvg FPS", pad=0,
-                         tooltip="Average fps of videos in the concept")
-        self.fps_avg_label.configure(font=ctk.CTkFont(underline=True))
-        self.fps_avg_preview = components.label(frame, 14, 1, pad=0, text="-", wraplength=150)
-        self.fps_min_label = components.label(frame, 13, 2, "\nMin FPS", pad=0,
-                         tooltip="Video in concept with the lowest fps")
-        self.fps_min_label.configure(font=ctk.CTkFont(underline=True))
-        self.fps_min_preview = components.label(frame, 14, 2, pad=0, text="-", wraplength=150)
-
-        #caption info
-        self.caption_max_label = components.label(frame, 15, 0, "\nMax Caption Length", pad=0,
-                         tooltip="Largest caption in concept by character count. For token count, assume ~2 tokens/word")
-        self.caption_max_label.configure(font=ctk.CTkFont(underline=True))
-        self.caption_max_preview = components.label(frame, 16, 0, pad=0, text="-", wraplength=150)
-        self.caption_avg_label = components.label(frame, 15, 1, "\nAvg Caption Length", pad=0,
-                         tooltip="Average length of caption in concept by character count. For token count, assume ~2 tokens/word")
-        self.caption_avg_label.configure(font=ctk.CTkFont(underline=True))
-        self.caption_avg_preview = components.label(frame, 16, 1, pad=0, text="-", wraplength=150)
-        self.caption_min_label = components.label(frame, 15, 2, "\nMin Caption Length", pad=0,
-                         tooltip="Smallest caption in concept by character count. For token count, assume ~2 tokens/word")
-        self.caption_min_label.configure(font=ctk.CTkFont(underline=True))
-        self.caption_min_preview = components.label(frame, 16, 2, pad=0, text="-", wraplength=150)
-
-        #aspect bucket info
-        self.aspect_bucket_label = components.label(frame, 17, 0, "\nAspect Bucketing", pad=0,
-                         tooltip="Graph of all possible buckets and the number of images in each one, defined as height/width. Buckets range from 0.25 (1:4 extremely wide) to 4 (4:1 extremely tall). \
-                            Images which don't match a bucket exactly are cropped to the nearest one.")
-        self.aspect_bucket_label.configure(font=ctk.CTkFont(underline=True))
-        self.small_bucket_label = components.label(frame, 17, 1, "\nSmallest Buckets", pad=0,
-                         tooltip="Image buckets with the least nonzero total images - if 'batch size' is larger than this, these images will be ignored during training! See the wiki for more details.")
-        self.small_bucket_label.configure(font=ctk.CTkFont(underline=True))
-        self.small_bucket_preview = components.label(frame, 18, 1, pad=0, text="-")
-
-        #aspect bucketing plot, mostly copied from timestep preview graph
-        appearance_mode = AppearanceModeTracker.get_mode()
-        background_color = self.winfo_rgb(ThemeManager.theme["CTkToplevel"]["fg_color"][appearance_mode])
-        text_color = self.winfo_rgb(ThemeManager.theme["CTkLabel"]["text_color"][appearance_mode])
-        background_color = f"#{int(background_color[0]/256):x}{int(background_color[1]/256):x}{int(background_color[2]/256):x}"
-        self.text_color = f"#{int(text_color[0]/256):x}{int(text_color[1]/256):x}{int(text_color[2]/256):x}"
-
-        plt.set_loglevel('WARNING')     #suppress errors about data type in bar chart
-        self.bucket_fig, self.bucket_ax = plt.subplots(figsize=(7,2))
-        self.canvas = FigureCanvasTkAgg(self.bucket_fig, master=frame)
-        self.canvas.get_tk_widget().grid(row=19, column=0, columnspan=4, rowspan=2)
-        self.bucket_fig.tight_layout()
-
-        self.bucket_fig.set_facecolor(background_color)
-        self.bucket_ax.set_facecolor(background_color)
-        self.bucket_ax.spines['bottom'].set_color(self.text_color)
-        self.bucket_ax.spines['left'].set_color(self.text_color)
-        self.bucket_ax.spines['top'].set_visible(False)
-        self.bucket_ax.spines['right'].set_color(self.text_color)
-        self.bucket_ax.tick_params(axis='x', colors=self.text_color, which="both")
-        self.bucket_ax.tick_params(axis='y', colors=self.text_color, which="both")
-        self.bucket_ax.xaxis.label.set_color(self.text_color)
-        self.bucket_ax.yaxis.label.set_color(self.text_color)
-
-        #refresh stats - must be after all labels are defined or will give error
-        components.button(master=frame, row=0, column=0, text="Refresh Basic", command=lambda: self.__get_concept_stats_threaded(False, 9999),
-                          tooltip="Reload basic statistics for the concept directory")
-        components.button(master=frame, row=0, column=1, text="Refresh Advanced", command=lambda: [self.__get_concept_stats_threaded(False, 9999), self.__get_concept_stats(True, 9999)],
-                          tooltip="Reload advanced statistics for the concept directory")       #run "basic" scan first before "advanced", seems to help the system cache the directories and run faster
-        components.button(master=frame, row=0, column=2, text="Abort Scan", command=lambda: self.__cancel_concept_stats(),
-                          tooltip="Stop the currently running scan if it's taking a long time - advanced scan will be slow on large folders and on HDDs")
-        self.processing_time = components.label(frame, 0, 3, text="-", tooltip="Time taken to process concept directory")
-
-        frame.pack(fill="both", expand=1)
-        return frame
+        # capitalization mode
+        components.label(container, 8, 0, "Capitalization Mode")
+        components.entry(container, 8, 1, self.text_ui_state, "caps_randomize_mode")
+        components.label(container, 8, 2, "Probability")
+        components.entry(container, 8, 3, self.text_ui_state, "caps_randomize_probability")
 
     def __prev_image_preview(self):
         self.image_preview_file_index = max(self.image_preview_file_index - 1, 0)
@@ -529,14 +400,21 @@ class ConceptWindow(ctk.CTkToplevel):
 
     def __update_image_preview(self):
         image_preview, filename_preview, caption_preview = self.__get_preview_image()
-        self.image.configure(light_image=image_preview, size=image_preview.size)
-        self.filename_preview.configure(text=filename_preview)
-        self.caption_preview.configure(state="normal")
-        self.caption_preview.delete(index1="1.0", index2="end")
-        self.caption_preview.insert(index="1.0", text=caption_preview)
-        self.caption_preview.configure(state="disabled")
+        self.preview_pixmap = self.__pil_to_qpixmap(image_preview)
+        self.image_label.setPixmap(self.preview_pixmap)
+        self.image_label.setFixedSize(min(image_preview.width,300), min(image_preview.height,300))
+        self.image_label.setScaledContents(True)
+
+        self.filename_preview_label.setText(filename_preview)
+        self.caption_preview.setReadOnly(False)
+        self.caption_preview.clear()
+        self.caption_preview.insertPlainText(caption_preview)
+        self.caption_preview.setReadOnly(True)
 
     def __get_preview_image(self):
+        """
+        pick an image from the concept.path, apply MGDS pipeline.
+        """
         preview_image_path = "resources/icons/icon.png"
         file_index = -1
         glob_pattern = "**/*.*" if self.concept.include_subdirectories else "*.*"
@@ -544,8 +422,9 @@ class ConceptWindow(ctk.CTkToplevel):
         if os.path.isdir(self.concept.path):
             for path in pathlib.Path(self.concept.path).glob(glob_pattern):
                 extension = os.path.splitext(path)[1]
-                if path.is_file() and path_util.is_supported_image_extension(extension) \
-                        and not path.name.endswith("-masklabel.png"):
+                if (path.is_file()
+                    and path_util.is_supported_image_extension(extension)
+                    and not path.name.endswith("-masklabel.png")):
                     preview_image_path = path_util.canonical_join(self.concept.path, path)
                     file_index += 1
                     if file_index == self.image_preview_file_index:
@@ -565,6 +444,7 @@ class ConceptWindow(ctk.CTkToplevel):
         else:
             mask_tensor = torch.ones((1, image_tensor.shape[1], image_tensor.shape[2]))
 
+        # Prepare pipeline input data
         input_module = InputPipelineModule({
             'true': True,
             'image': image_tensor,
@@ -590,15 +470,57 @@ class ConceptWindow(ctk.CTkToplevel):
             'enable_random_mask_rotate_crop': self.concept.image.enable_random_mask_rotate_crop,
         })
 
-        circular_mask_shrink = RandomCircularMaskShrink(mask_name='mask', shrink_probability=1.0, shrink_factor_min=0.2, shrink_factor_max=1.0, enabled_in_name='enable_random_circular_mask_shrink')
-        random_mask_rotate_crop = RandomMaskRotateCrop(mask_name='mask', additional_names=['image'], min_size=512, min_padding_percent=10, max_padding_percent=30, max_rotate_angle=20, enabled_in_name='enable_random_mask_rotate_crop')
-        random_flip = RandomFlip(names=['image', 'mask'], enabled_in_name='enable_random_flip', fixed_enabled_in_name='enable_fixed_flip')
-        random_rotate = RandomRotate(names=['image', 'mask'], enabled_in_name='enable_random_rotate', fixed_enabled_in_name='enable_fixed_rotate', max_angle_in_name='random_rotate_max_angle')
-        random_brightness = RandomBrightness(names=['image'], enabled_in_name='enable_random_brightness', fixed_enabled_in_name='enable_fixed_brightness', max_strength_in_name='random_brightness_max_strength')
-        random_contrast = RandomContrast(names=['image'], enabled_in_name='enable_random_contrast', fixed_enabled_in_name='enable_fixed_contrast', max_strength_in_name='random_contrast_max_strength')
-        random_saturation = RandomSaturation(names=['image'], enabled_in_name='enable_random_saturation', fixed_enabled_in_name='enable_fixed_saturation', max_strength_in_name='random_saturation_max_strength')
-        random_hue = RandomHue(names=['image'], enabled_in_name='enable_random_hue', fixed_enabled_in_name='enable_fixed_hue', max_strength_in_name='random_hue_max_strength')
-        output_module = OutputPipelineModule(['image', 'mask'])
+        # MGDS modules
+        circular_mask_shrink = RandomCircularMaskShrink(
+            mask_name='mask', shrink_probability=1.0,
+            shrink_factor_min=0.2, shrink_factor_max=1.0,
+            enabled_in_name='enable_random_circular_mask_shrink'
+        )
+        random_mask_rotate_crop = RandomMaskRotateCrop(
+            mask_name='mask',
+            additional_names=['image'],
+            min_size=512,
+            min_padding_percent=10,
+            max_padding_percent=30,
+            max_rotate_angle=20,
+            enabled_in_name='enable_random_mask_rotate_crop'
+        )
+        random_flip = RandomFlip(
+            names=['image','mask'],
+            enabled_in_name='enable_random_flip',
+            fixed_enabled_in_name='enable_fixed_flip'
+        )
+        random_rotate = RandomRotate(
+            names=['image','mask'],
+            enabled_in_name='enable_random_rotate',
+            fixed_enabled_in_name='enable_fixed_rotate',
+            max_angle_in_name='random_rotate_max_angle'
+        )
+        random_brightness = RandomBrightness(
+            names=['image'],
+            enabled_in_name='enable_random_brightness',
+            fixed_enabled_in_name='enable_fixed_brightness',
+            max_strength_in_name='random_brightness_max_strength'
+        )
+        random_contrast = RandomContrast(
+            names=['image'],
+            enabled_in_name='enable_random_contrast',
+            fixed_enabled_in_name='enable_fixed_contrast',
+            max_strength_in_name='random_contrast_max_strength'
+        )
+        random_saturation = RandomSaturation(
+            names=['image'],
+            enabled_in_name='enable_random_saturation',
+            fixed_enabled_in_name='enable_fixed_saturation',
+            max_strength_in_name='random_saturation_max_strength'
+        )
+        random_hue = RandomHue(
+            names=['image'],
+            enabled_in_name='enable_random_hue',
+            fixed_enabled_in_name='enable_fixed_hue',
+            max_strength_in_name='random_hue_max_strength'
+        )
+        output_module = OutputPipelineModule(['image','mask'])
 
         modules = [
             input_module,
@@ -613,6 +535,7 @@ class ConceptWindow(ctk.CTkToplevel):
             output_module,
         ]
 
+        from mgds.LoadingPipeline import LoadingPipeline
         pipeline = LoadingPipeline(
             device=torch.device('cpu'),
             modules=modules,
@@ -620,184 +543,47 @@ class ConceptWindow(ctk.CTkToplevel):
             seed=random.randint(0, 2**30),
             state=None,
             initial_epoch=0,
-            initial_index=0,
+            initial_index=0
         )
 
         data = pipeline.__next__()
         image_tensor = data['image']
         mask_tensor = data['mask']
-        #display filename and first line of base caption from prompt source
-        #will try to change to preview caption with text variations at some point
+
+        # filename + first line of base caption
         filename_output = os.path.basename(preview_image_path)
         try:
             if self.concept.text.prompt_source == "sample":
-                with open(splitext[0] + ".txt") as prompt_file:
+                with open(splitext[0] + ".txt", "r", encoding="utf-8") as prompt_file:
                     prompt_output = prompt_file.readline()
             elif self.concept.text.prompt_source == "filename":
                 prompt_output = os.path.splitext(os.path.basename(preview_image_path))[0]
             elif self.concept.text.prompt_source == "concept":
-                with open(self.concept.text.prompt_path) as prompt_file:
+                with open(self.concept.text.prompt_path, "r", encoding="utf-8") as prompt_file:
                     prompt_output = prompt_file.readline()
+            else:
+                prompt_output = "No caption found."
         except FileNotFoundError:
             prompt_output = "No caption found."
 
         mask_tensor = torch.clamp(mask_tensor, 0.3, 1)
         image_tensor = image_tensor * mask_tensor
+        out_image = functional.to_pil_image(image_tensor)
+        out_image.thumbnail((300, 300))
 
-        image = functional.to_pil_image(image_tensor)
+        return out_image, filename_output, prompt_output
 
-        image.thumbnail((300, 300))
+    def __pil_to_qpixmap(self, pil_image: Image.Image) -> QPixmap:
+        """
+        Convert a PIL Image to a QPixmap for display in a QLabel.
+        """
+        if pil_image.mode != "RGB":
+            pil_image = pil_image.convert("RGB")
 
-        return image, filename_output, prompt_output
-
-    def __update_concept_stats(self):
-        #file size
-        self.file_size_preview.configure(text=str(int(self.concept.concept_stats["file_size"]/1048576)) + " MB")
-        self.processing_time.configure(text=str(round(self.concept.concept_stats["processing_time"], 2)) + " s")
-
-        #directory count
-        self.dir_count_preview.configure(text=self.concept.concept_stats["directory_count"])
-
-        #image count
-        self.image_count_preview.configure(text=self.concept.concept_stats["image_count"])
-        self.image_count_mask_preview.configure(text=self.concept.concept_stats["image_with_mask_count"])
-        self.image_count_caption_preview.configure(text=self.concept.concept_stats["image_with_caption_count"])
-
-        #video count
-        self.video_count_preview.configure(text=self.concept.concept_stats["video_count"])
-        #self.video_count_mask_preview.configure(text=self.concept.concept_stats["video_with_mask_count"])
-        self.video_count_caption_preview.configure(text=self.concept.concept_stats["video_with_caption_count"])
-
-        #mask count
-        self.mask_count_preview.configure(text=self.concept.concept_stats["mask_count"])
-        self.mask_count_preview_unpaired.configure(text=self.concept.concept_stats["unpaired_masks"])
-
-        #caption count
-        self.caption_count_preview.configure(text=self.concept.concept_stats["caption_count"])
-        self.caption_count_preview_unpaired.configure(text=self.concept.concept_stats["unpaired_captions"])
-
-        #resolution info
-        max_pixels = self.concept.concept_stats["max_pixels"]
-        avg_pixels = self.concept.concept_stats["avg_pixels"]
-        min_pixels = self.concept.concept_stats["min_pixels"]
-
-        if any(isinstance(x, str) for x in [max_pixels, avg_pixels, min_pixels]) or self.concept.concept_stats["image_count"] == 0:   #will be str if adv stats were not taken
-            self.pixel_max_preview.configure(text="-")
-            self.pixel_avg_preview.configure(text="-")
-            self.pixel_min_preview.configure(text="-")
-        else:
-            #formatted as (#pixels/1000000) MP, width x height, \n filename
-            self.pixel_max_preview.configure(text=f'{str(round(max_pixels[0]/1000000, 2))} MP, {max_pixels[2]}\n{max_pixels[1]}')
-            self.pixel_avg_preview.configure(text=f'{str(round(avg_pixels/1000000, 2))} MP, ~{int(math.sqrt(avg_pixels))}w x {int(math.sqrt(avg_pixels))}h')
-            self.pixel_min_preview.configure(text=f'{str(round(min_pixels[0]/1000000, 2))} MP, {min_pixels[2]}\n{min_pixels[1]}')
-
-        #video length and fps info
-        max_length = self.concept.concept_stats["max_length"]
-        avg_length = self.concept.concept_stats["avg_length"]
-        min_length = self.concept.concept_stats["min_length"]
-        max_fps = self.concept.concept_stats["max_fps"]
-        avg_fps = self.concept.concept_stats["avg_fps"]
-        min_fps = self.concept.concept_stats["min_fps"]
-
-        if any(isinstance(x, str) for x in [max_length, avg_length, min_length]) or self.concept.concept_stats["video_count"] == 0:   #will be str if adv stats were not taken
-            self.length_max_preview.configure(text="-")
-            self.length_avg_preview.configure(text="-")
-            self.length_min_preview.configure(text="-")
-            self.fps_max_preview.configure(text="-")
-            self.fps_avg_preview.configure(text="-")
-            self.fps_min_preview.configure(text="-")
-        else:
-            #formatted as (#frames) frames \n filename
-            self.length_max_preview.configure(text=f'{int(max_length[0])} frames\n{max_length[1]}')
-            self.length_avg_preview.configure(text=f'{int(avg_length)} frames')
-            self.length_min_preview.configure(text=f'{int(min_length[0])} frames\n{min_length[1]}')
-            #formatted as (#fps) fps \n filename
-            self.fps_max_preview.configure(text=f'{int(max_fps[0])} fps\n{max_fps[1]}')
-            self.fps_avg_preview.configure(text=f'{int(avg_fps)} fps')
-            self.fps_min_preview.configure(text=f'{int(min_fps[0])} fps\n{min_fps[1]}')
-
-        #caption info
-        max_caption_length = self.concept.concept_stats["max_caption_length"]
-        avg_caption_length = self.concept.concept_stats["avg_caption_length"]
-        min_caption_length = self.concept.concept_stats["min_caption_length"]
-
-        if any(isinstance(x, str) for x in [max_caption_length, avg_caption_length, min_caption_length]) or self.concept.concept_stats["caption_count"] == 0:   #will be str if adv stats were not taken
-            self.caption_max_preview.configure(text="-")
-            self.caption_avg_preview.configure(text="-")
-            self.caption_min_preview.configure(text="-")
-        else:
-            #formatted as (#chars) chars, (#words) words, \n filename
-            self.caption_max_preview.configure(text=f'{max_caption_length[0]} chars, {max_caption_length[2]} words\n{max_caption_length[1]}')
-            self.caption_avg_preview.configure(text=f'{int(avg_caption_length[0])} chars, {int(avg_caption_length[1])} words')
-            self.caption_min_preview.configure(text=f'{min_caption_length[0]} chars, {min_caption_length[2]} words\n{min_caption_length[1]}')
-
-        #aspect bucketing
-        aspect_buckets = self.concept.concept_stats["aspect_buckets"]
-        if len(aspect_buckets) != 0 and max(val for val in aspect_buckets.values()) > 0:    #check aspect_bucket data exists and is not all zero
-            min_val = min(val for val in aspect_buckets.values() if val > 0)                #smallest nonzero values
-            if max(val for val in aspect_buckets.values()) > min_val:                       #check if any buckets larger than min_val exist - if all images are same aspect then there won't be
-                min_val2 = min(val for val in aspect_buckets.values() if (val > 0 and val != min_val))  #second smallest bucket
-            else:
-                min_val2 = min_val  #if no second smallest bucket exists set to min_val
-            min_aspect_buckets = {key: val for key,val in aspect_buckets.items() if val in (min_val, min_val2)}
-            min_bucket_str = ""
-            for key, val in min_aspect_buckets.items():
-                min_bucket_str += f'aspect {key}: {val} img\n'
-            min_bucket_str.strip()
-            self.small_bucket_preview.configure(text=min_bucket_str)
-
-        self.bucket_ax.cla()
-        aspects = [str(x) for x in list(aspect_buckets.keys())]
-        counts = list(aspect_buckets.values())
-        b = self.bucket_ax.bar(aspects, counts)
-        self.bucket_ax.bar_label(b, color=self.text_color)
-        self.canvas.draw()
-
-    def __get_concept_stats(self, advanced_checks : bool, waittime : float):
-        start_time = time.perf_counter()
-        last_update = time.perf_counter()
-        subfolders = [self.concept.path]
-        stats_dict = concept_stats.init_concept_stats(self.concept, advanced_checks)
-        for dir in subfolders:
-            stats_dict = concept_stats.folder_scan(dir, stats_dict, advanced_checks, self.concept)
-            stats_dict["processing_time"] = time.perf_counter() - start_time
-            if self.concept.include_subdirectories:     #add all subfolders of current directory to for loop
-                subfolders.extend([f for f in os.scandir(dir) if f.is_dir()])
-            self.concept.concept_stats = stats_dict
-            #cancel and set init stats if longer than waiting time or cancel flag set
-            if (time.perf_counter() - start_time) > waittime or self.cancel_scan_flag.is_set():
-                stats_dict = concept_stats.init_concept_stats(self.concept, advanced_checks)
-                stats_dict["processing_time"] = time.perf_counter() - start_time
-                self.concept.concept_stats = stats_dict
-                self.cancel_scan_flag.clear()
-                break
-            #update GUI approx every half second
-            if time.perf_counter() > (last_update + 0.5):
-                last_update = time.perf_counter()
-                self.__update_concept_stats()
-                self.concept_stats_tab.update()
-
-        self.__update_concept_stats()
-
-    def __get_concept_stats_threaded(self, advanced_checks : bool, waittime : float):
-        self.p = multiprocessing.Process(target=self.__get_concept_stats(advanced_checks, waittime), daemon=True)
-        self.p.start()
-
-    def __cancel_concept_stats(self):
-        self.cancel_scan_flag.set()
-
-    def __auto_update_concept_stats(self):
-        try:
-            self.__update_concept_stats()      #load stats from config if available, else raises KeyError
-            if self.concept.concept_stats["image_count"] == 0:  #force rescan if zero images
-                raise KeyError
-        except KeyError:
-            try:
-                self.__get_concept_stats_threaded(False, 2)    #force rescan if config is empty, timeout of 2 sec
-                if self.concept.concept_stats["processing_time"] < 0.1:
-                    self.__get_concept_stats_threaded(True, 2)    #do advanced scan automatically if basic took <0.1s
-            except FileNotFoundError:              #avoid error when loading concept window without config path defined
-                pass
+        data = pil_image.tobytes("raw", "RGB")
+        qimg = QImage(data, pil_image.width, pil_image.height, 3*pil_image.width, QImage.Format_RGB888)
+        return QPixmap.fromImage(qimg)
 
     def __ok(self):
-        self.destroy()
+        # self.concept.configure_element()
+        self.accept()  # or self.accept() if you want to close the dialog

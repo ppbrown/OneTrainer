@@ -1,54 +1,81 @@
+
+# Might be better called "Sampling Frame"
+# Contains one definition to take a sample, during training.
+# (as handled under SamplingTab)
+
+import os
+from PySide6.QtWidgets import (
+    QFrame, QGridLayout, QLabel, QLineEdit, QCheckBox, QComboBox, QPushButton, QFileDialog
+)
+from PySide6.QtCore import Qt
+
 from modules.util.config.SampleConfig import SampleConfig
 from modules.util.enum.NoiseScheduler import NoiseScheduler
-from modules.util.ui import components
 from modules.util.ui.UIState import UIState
+from modules.util.ui import components
 
-import customtkinter as ctk
 
 
-class SampleFrame(ctk.CTkFrame):
+class SampleFrame(QFrame):
+
     def __init__(
-            self,
-            parent,
-            sample: SampleConfig,
-            ui_state: UIState,
-            include_prompt: bool = True,
-            include_settings: bool = True,
+        self,
+        parent,
+        sample: SampleConfig,
+        ui_state: UIState,
+        include_prompt: bool = True,
+        include_settings: bool = True,
     ):
-        ctk.CTkFrame.__init__(self, parent, fg_color="transparent")
+        super().__init__()
 
         self.sample = sample
         self.ui_state = ui_state
+        self.include_prompt = include_prompt
+        self.include_settings = include_settings
 
-        if include_prompt and include_prompt:
-            self.grid_rowconfigure(0, weight=0)
-            self.grid_rowconfigure(1, weight=1)
-        self.grid_columnconfigure(0, weight=1)
+        # Top-level layout for this frame
+        self.layout_main = QGridLayout(self)
+        self.layout_main.setContentsMargins(0, 0, 0, 0)
+        self.layout_main.setSpacing(5)
+        self.setLayout(self.layout_main)
 
-        if include_prompt:
-            top_frame = ctk.CTkFrame(self, fg_color="transparent")
-            top_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
+        row_index = 0
 
-            top_frame.grid_columnconfigure(0, weight=0)
-            top_frame.grid_columnconfigure(1, weight=1)
+        # If we want a "top_frame" for prompt
+        if self.include_prompt:
+            self.top_frame = QFrame(self)
+            self.top_frame_layout = QGridLayout(self.top_frame)
+            self.top_frame_layout.setContentsMargins(0, 0, 0, 0)
+            self.top_frame_layout.setSpacing(5)
+            self.top_frame.setLayout(self.top_frame_layout)
 
-        if include_settings:
-            bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
-            bottom_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nsew")
+            # Place top_frame in row=0
+            self.layout_main.addWidget(self.top_frame, row_index, 0, 1, 1, alignment=Qt.AlignTop)
+            row_index += 1
 
-            bottom_frame.grid_columnconfigure(0, weight=0)
-            bottom_frame.grid_columnconfigure(1, weight=1)
-            bottom_frame.grid_columnconfigure(2, weight=0)
-            bottom_frame.grid_columnconfigure(3, weight=1)
+        # If we want a "bottom_frame" for settings
+        if self.include_settings:
+            self.bottom_frame = QFrame(self)
+            self.bottom_frame_layout = QGridLayout(self.bottom_frame)
+            self.bottom_frame_layout.setContentsMargins(0, 0, 0, 0)
+            self.bottom_frame_layout.setSpacing(5)
+            self.bottom_frame.setLayout(self.bottom_frame_layout)
+
+            # Place bottom_frame in row=1
+            self.layout_main.addWidget(self.bottom_frame, row_index, 0, 1, 1, alignment=Qt.AlignTop)
+            row_index += 1
+
+        top_frame = self.top_frame if self.include_prompt else None
+        bottom_frame = self.bottom_frame if self.include_settings else None
 
         if include_prompt:
             # prompt
             components.label(top_frame, 0, 0, "prompt:")
-            components.entry(top_frame, 0, 1, self.ui_state, "prompt")
+            components.entry(top_frame, 0, 1, self.ui_state, "prompt", width=600)
 
             # negative prompt
             components.label(top_frame, 1, 0, "negative prompt:")
-            components.entry(top_frame, 1, 1, self.ui_state, "negative_prompt")
+            components.entry(top_frame, 1, 1, self.ui_state, "negative_prompt", width=600)
 
         if include_settings:
             # width

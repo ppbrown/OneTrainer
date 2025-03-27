@@ -1,142 +1,195 @@
-from tkinter import filedialog
-
-from modules.util.ui.ui_utils import set_window_icon
-
-import customtkinter as ctk
 
 
-class GenerateMasksWindow(ctk.CTkToplevel):
+# Sub window for the CaptionUI tools.
+# Allows for creation of image masks
+
+import os
+from PySide6.QtWidgets import (
+    QDialog, QLabel, QLineEdit, QComboBox, QCheckBox, QProgressBar,
+    QPushButton, QFileDialog, QGridLayout, QVBoxLayout
+)
+from PySide6.QtCore import Qt
+
+class GenerateMasksWindow(QDialog):
+    """
+    Window for generating masks for a folder of images.
+    """
+
     def __init__(self, parent, path, parent_include_subdirectories, *args, **kwargs):
-        """
-        Window for generating masks for a folder of images
+        super().__init__(parent, *args, **kwargs)
 
-        Parameters:
-            parent (`Tk`): the parent window
-            path (`str`): the path to the folder
-            parent_include_subdirectories (`bool`): whether to include subdirectories. used to set the default value of the include subdirectories checkbox
-        """
-        ctk.CTkToplevel.__init__(self, parent, *args, **kwargs)
-        self.parent = parent
+        self.parent = parent  # reference to the parent object/window
+        self.setWindowTitle("Batch generate masks")
+        self.resize(360, 430)  # Or set a fixed size if needed
 
+        # Default path
         if path is None:
             path = ""
 
-        self.title("Batch generate masks")
-        self.geometry("360x430")
-        self.resizable(True, True)
-        set_window_icon(self)
-        self.wait_visibility()
-        self.grab_set()
-        self.focus_set()
-
-        self.mode_var = ctk.StringVar(self, "Create if absent")
-        self.modes = ["Replace all masks", "Create if absent", "Add to existing", "Subtract from existing", "Blend with existing"]
-        self.model_var = ctk.StringVar(self, "ClipSeg")
+        # ---------------------------------------------------------------------
+        # Variables / state
+        # ---------------------------------------------------------------------
+        self.modes = ["Replace all masks", "Create if absent", "Add to existing",
+                      "Subtract from existing", "Blend with existing"]
         self.models = ["ClipSeg", "Rembg", "Rembg-Human", "Hex Color"]
 
-        self.frame = ctk.CTkFrame(self, width=600, height=300)
-        self.frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        # ---------------------------------------------------------------------
+        # Main layout
+        # ---------------------------------------------------------------------
+        layout = QVBoxLayout()
+        self.setLayout(layout)
 
-        self.model_label = ctk.CTkLabel(self.frame, text="Model", width=100)
-        self.model_label.grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        self.model_dropdown = ctk.CTkOptionMenu(self.frame, variable=self.model_var, values=self.models, dynamic_resizing=False, width=200)
-        self.model_dropdown.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        # We'll use a QGridLayout inside the main layout
+        grid = QGridLayout()
+        layout.addLayout(grid)
 
-        self.path_label = ctk.CTkLabel(self.frame, text="Folder", width=100)
-        self.path_label.grid(row=1, column=0, sticky="w",padx=5, pady=5)
-        self.path_entry = ctk.CTkEntry(self.frame, width=150)
-        self.path_entry.insert(0, path)
-        self.path_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
-        self.path_button = ctk.CTkButton(self.frame, width=30, text="...", command=lambda: self.browse_for_path(self.path_entry))
-        self.path_button.grid(row=1, column=1, sticky="e", padx=5, pady=5)
+        # Model label + combo
+        model_label = QLabel("Model:")
+        self.model_combo = QComboBox()
+        self.model_combo.addItems(self.models)
+        self.model_combo.setCurrentIndex(self.models.index("ClipSeg"))  # default to ClipSeg
+        grid.addWidget(model_label, 0, 0)
+        grid.addWidget(self.model_combo, 0, 1)
 
-        self.prompt_label = ctk.CTkLabel(self.frame, text="Prompt", width=100)
-        self.prompt_label.grid(row=2, column=0, sticky="w",padx=5, pady=5)
-        self.prompt_entry = ctk.CTkEntry(self.frame, width=200)
-        self.prompt_entry.grid(row=2, column=1, sticky="w", padx=5, pady=5)
+        # Path label + line + browse button
+        path_label = QLabel("Folder:")
+        self.path_edit = QLineEdit(path)
+        path_button = QPushButton("...")
+        path_button.clicked.connect(self.browse_for_path)
 
-        self.mode_label = ctk.CTkLabel(self.frame, text="Mode", width=100)
-        self.mode_label.grid(row=3, column=0, sticky="w", padx=5, pady=5)
-        self.mode_dropdown = ctk.CTkOptionMenu(self.frame, variable=self.mode_var, values=self.modes, dynamic_resizing=False, width=200)
-        self.mode_dropdown.grid(row=3, column=1, sticky="w", padx=5, pady=5)
+        grid.addWidget(path_label, 1, 0)
+        grid.addWidget(self.path_edit, 1, 1)
+        grid.addWidget(path_button, 1, 2)
 
-        self.threshold_label = ctk.CTkLabel(self.frame, text="Threshold", width=100)
-        self.threshold_label.grid(row=4, column=0, sticky="w", padx=5, pady=5)
-        self.threshold_entry = ctk.CTkEntry(self.frame, width=200, placeholder_text="0.0 - 1.0")
-        self.threshold_entry.insert(0, "0.3")
-        self.threshold_entry.grid(row=4, column=1, sticky="w", padx=5, pady=5)
+        # Prompt label + entry
+        prompt_label = QLabel("Prompt:")
+        self.prompt_edit = QLineEdit()
+        grid.addWidget(prompt_label, 2, 0)
+        grid.addWidget(self.prompt_edit, 2, 1, 1, 2)
 
-        self.smooth_label = ctk.CTkLabel(self.frame, text="Smooth", width=100)
-        self.smooth_label.grid(row=5, column=0, sticky="w", padx=5, pady=5)
-        self.smooth_entry = ctk.CTkEntry(self.frame, width=200, placeholder_text="5")
-        self.smooth_entry.insert(0, 5)
-        self.smooth_entry.grid(row=5, column=1, sticky="w", padx=5, pady=5)
+        # Mode label + combo
+        mode_label = QLabel("Mode:")
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(self.modes)
+        self.mode_combo.setCurrentIndex(self.modes.index("Create if absent"))
+        grid.addWidget(mode_label, 3, 0)
+        grid.addWidget(self.mode_combo, 3, 1, 1, 2)
 
-        self.expand_label = ctk.CTkLabel(self.frame, text="Expand", width=100)
-        self.expand_label.grid(row=6, column=0, sticky="w", padx=5, pady=5)
-        self.expand_entry = ctk.CTkEntry(self.frame, width=200, placeholder_text="10")
-        self.expand_entry.insert(0, 10)
-        self.expand_entry.grid(row=6, column=1, sticky="w", padx=5, pady=5)
+        # Threshold label + entry
+        threshold_label = QLabel("Threshold:")
+        self.threshold_edit = QLineEdit()
+        self.threshold_edit.setPlaceholderText("0.0 - 1.0")
+        self.threshold_edit.setText("0.3")
+        grid.addWidget(threshold_label, 4, 0)
+        grid.addWidget(self.threshold_edit, 4, 1, 1, 2)
 
-        self.alpha_label = ctk.CTkLabel(self.frame, text="Alpha", width=100)
-        self.alpha_label.grid(row=7, column=0, sticky="w", padx=5, pady=5)
-        self.alpha_entry = ctk.CTkEntry(self.frame, width=200, placeholder_text="1")
-        self.alpha_entry.insert(0, 1)
-        self.alpha_entry.grid(row=7, column=1, sticky="w", padx=5, pady=5)
+        # Smooth label + entry
+        smooth_label = QLabel("Smooth:")
+        self.smooth_edit = QLineEdit()
+        self.smooth_edit.setPlaceholderText("5")
+        self.smooth_edit.setText("5")
+        grid.addWidget(smooth_label, 5, 0)
+        grid.addWidget(self.smooth_edit, 5, 1, 1, 2)
 
-        self.include_subdirectories_label = ctk.CTkLabel(self.frame, text="Include subfolders", width=100)
-        self.include_subdirectories_label.grid(row=8, column=0, sticky="w", padx=5, pady=5)
-        self.include_subdirectories_var = ctk.BooleanVar(self, parent_include_subdirectories)
-        self.include_subdirectories_switch = ctk.CTkSwitch(self.frame, text="", variable=self.include_subdirectories_var)
-        self.include_subdirectories_switch.grid(row=8, column=1, sticky="w", padx=5, pady=5)
+        # Expand label + entry
+        expand_label = QLabel("Expand:")
+        self.expand_edit = QLineEdit()
+        self.expand_edit.setPlaceholderText("10")
+        self.expand_edit.setText("10")
+        grid.addWidget(expand_label, 6, 0)
+        grid.addWidget(self.expand_edit, 6, 1, 1, 2)
 
-        self.progress_label = ctk.CTkLabel(self.frame, text="Progress: 0/0", width=100)
-        self.progress_label.grid(row=9, column=0, sticky="w", padx=5, pady=5)
-        self.progress = ctk.CTkProgressBar(self.frame, orientation="horizontal", mode="determinate", width=200)
-        self.progress.grid(row=9, column=1, sticky="w", padx=5, pady=5)
+        # Alpha label + entry
+        alpha_label = QLabel("Alpha:")
+        self.alpha_edit = QLineEdit()
+        self.alpha_edit.setPlaceholderText("1")
+        self.alpha_edit.setText("1")
+        grid.addWidget(alpha_label, 7, 0)
+        grid.addWidget(self.alpha_edit, 7, 1, 1, 2)
 
-        self.create_masks_button = ctk.CTkButton(self.frame, text="Create Masks", width=310, command=self.create_masks)
-        self.create_masks_button.grid(row=10, column=0, columnspan=2, sticky="w", padx=5, pady=5)
+        # Include subfolders
+        subfolders_label = QLabel("Include subfolders:")
+        self.include_sub_check = QCheckBox()
+        self.include_sub_check.setChecked(bool(parent_include_subdirectories))
+        grid.addWidget(subfolders_label, 8, 0)
+        grid.addWidget(self.include_sub_check, 8, 1)
 
-        self.frame.pack(fill="both", expand=True)
-        self.after(150, lambda: set_window_icon(self))
+        # Progress label + bar
+        self.progress_label = QLabel("Progress: 0/0")
+        self.progress_bar = QProgressBar()
+        grid.addWidget(self.progress_label, 9, 0)
+        grid.addWidget(self.progress_bar, 9, 1, 1, 2)
 
-    def browse_for_path(self, entry_box):
-        # get the path from the user
-        path = filedialog.askdirectory()
-        # set the path to the entry box
-        # delete entry box text
-        entry_box.focus_set()
-        entry_box.delete(0, filedialog.END)
-        entry_box.insert(0, path)
-        self.focus_set()
+        # Create masks button
+        create_button = QPushButton("Create Masks")
+        create_button.clicked.connect(self.create_masks)
+        grid.addWidget(create_button, 10, 0, 1, 3)
+
+        layout.addStretch(1)
+
+        # You can set this QDialog to modal if you want:
+        # self.setModal(True)
+
+    def browse_for_path(self):
+        """
+        Open a directory dialog, update the path_edit field.
+        """
+        chosen_dir = QFileDialog.getExistingDirectory(self, "Select Directory", self.path_edit.text())
+        if chosen_dir:
+            self.path_edit.setText(chosen_dir)
 
     def set_progress(self, value, max_value):
-        progress = value / max_value
-        self.progress.set(progress)
-        self.progress_label.configure(text=f"{value}/{max_value}")
-        self.progress.update()
+        """
+        Update progress bar and label.
+        """
+        if max_value == 0:
+            percentage = 0
+        else:
+            percentage = int((value / max_value) * 100)
+
+        self.progress_bar.setValue(percentage)
+        self.progress_label.setText(f"Progress: {value}/{max_value}")
 
     def create_masks(self):
-        self.parent.load_masking_model(self.model_var.get())
+        """
+        Called when the "Create Masks" button is pressed.
+        """
+        if not self.parent:
+            return  # or raise an exception, depends on how your parent is structured
 
-        mode = {
+        # Ask parent to load the chosen model
+        model_name = self.model_combo.currentText()
+        self.parent.load_masking_model(model_name)
+
+        # Map selected string to your internal strings
+        mode_map = {
             "Replace all masks": "replace",
             "Create if absent": "fill",
             "Add to existing": "add",
             "Subtract from existing": "subtract",
             "Blend with existing": "blend",
-        }[self.mode_var.get()]
+        }
+        selected_mode = mode_map.get(self.mode_combo.currentText(), "fill")
 
+        # Convert text fields
+        alpha = float(self.alpha_edit.text() or "1")
+        threshold = float(self.threshold_edit.text() or "0.3")
+        smooth_pixels = int(self.smooth_edit.text() or "5")
+        expand_pixels = int(self.expand_edit.text() or "10")
+
+        # Call the parent's masking model
         self.parent.masking_model.mask_folder(
-            sample_dir=self.path_entry.get(),
-            prompts=[self.prompt_entry.get()],
-            mode=mode,
-            alpha=float(self.alpha_entry.get()),
-            threshold=float(self.threshold_entry.get()),
-            smooth_pixels=int(self.smooth_entry.get()),
-            expand_pixels=int(self.expand_entry.get()),
+            sample_dir=self.path_edit.text(),
+            prompts=[self.prompt_edit.text()],
+            mode=selected_mode,
+            alpha=alpha,
+            threshold=threshold,
+            smooth_pixels=smooth_pixels,
+            expand_pixels=expand_pixels,
             progress_callback=self.set_progress,
-            include_subdirectories=self.include_subdirectories_var.get(),
+            include_subdirectories=self.include_sub_check.isChecked(),
         )
+        # Possibly refresh parent's image
         self.parent.load_image()
+        # Close the dialog if desired
+        # self.accept()

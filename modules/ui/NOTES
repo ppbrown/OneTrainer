@@ -1,0 +1,31 @@
+
+
+
+
+SamplingTab  -> create_new_element() creates a new data element, and
+  matching SampleWidget
+
+   SampleWidget stores SamplingTab.open_element_window as the relevant edit button action
+   Presumably that is so that SamplingTab can save config, as well as update widgt.
+   (But why not just call back to SampleWidget, and then have it call SamplingTab)
+
+
+
+
+clicking on the "..." in SampleWidget... is actually a lambda wrapper for
+    open_command(self.i, self.ui_state)
+        which gets wrapped by SUPERCLASS.__open_element_window
+            which then does a  passthrough to SamplingTab.open_element_window(i, ui_state) ...
+                Which then calls  SampleParamsWindow((SampleTabObject), currentconfig, ui_state)
+        super.__open_element_window WAITS for dialog to close, THEN does:
+            -- super.__save_current_config()
+             -- Widget.configure_element()
+
+All that last paragraph could be replaced by
+
+SampleWidget click on "...", calls SampleParamsWindow(master, ..., ...)
+    waits for close, then does:
+        -- self.configure_element()
+        -- master.__save_current_config()
+     
+

@@ -1,39 +1,37 @@
+# timestep_distribution_window.py
+
 import random
 
-from modules.modelSetup.mixin.ModelSetupNoiseMixin import (
-    ModelSetupNoiseMixin,
+import torch
+import matplotlib
+matplotlib.use("QtAgg")  # Use Qt backend
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+
+from PySide6.QtWidgets import (
+    QDialog, QGridLayout, QScrollArea, QFrame, QPushButton
 )
+from PySide6.QtCore import Qt
+
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.TimestepDistribution import TimestepDistribution
 from modules.util.ui import components
-from modules.util.ui.ui_utils import set_window_icon
 from modules.util.ui.UIState import UIState
 
-import torch
-from torch import Tensor
-
-import customtkinter as ctk
-from customtkinter import AppearanceModeTracker, ThemeManager
-from matplotlib import pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-
-
-class TimestepGenerator(ModelSetupNoiseMixin):
-
+# This class replicates your MGDS-based TimestepGenerator logic
+class TimestepGenerator:
     def __init__(
-            self,
-            timestep_distribution: TimestepDistribution,
-            min_noising_strength: float,
-            max_noising_strength: float,
-            noising_weight: float,
-            noising_bias: float,
-            timestep_shift: float,
-            dynamic_timestep_shifting: bool,
-            latent_width: int,
-            latent_height: int,
+        self,
+        timestep_distribution: TimestepDistribution,
+        min_noising_strength: float,
+        max_noising_strength: float,
+        noising_weight: float,
+        noising_bias: float,
+        timestep_shift: float,
+        dynamic_timestep_shifting: bool,
+        latent_width: int,
+        latent_height: int,
     ):
-        super().__init__()
-
         self.timestep_distribution = timestep_distribution
         self.min_noising_strength = min_noising_strength
         self.max_noising_strength = max_noising_strength
@@ -44,9 +42,16 @@ class TimestepGenerator(ModelSetupNoiseMixin):
         self.latent_width = latent_width
         self.latent_height = latent_height
 
-    def generate(self) -> Tensor:
-        generator = torch.Generator()
-        generator.seed()
+    def generate(self) -> torch.Tensor:
+        from modules.util.config.TrainConfig import TrainConfig
+        from modules.modelSetup.mixin.ModelSetupNoiseMixin import ModelSetupNoiseMixin
+
+        # we define a local mixin object
+        class NoiseHelper(ModelSetupNoiseMixin):
+            pass
+
+        helper = NoiseHelper()
+        generator = torch.Generator().manual_seed(random.randint(0, 2**30))
 
         config = TrainConfig.default_values()
         config.timestep_distribution = self.timestep_distribution
@@ -57,129 +62,104 @@ class TimestepGenerator(ModelSetupNoiseMixin):
         config.timestep_shift = self.timestep_shift
         config.dynamic_timestep_shifting = self.dynamic_timestep_shifting
 
-
-        return self._get_timestep_discrete(
+        return helper._get_timestep_discrete(
             num_train_timesteps=1000,
             deterministic=False,
             generator=generator,
-            batch_size=1000000,
+            batch_size=1_000_000,
             config=config,
             latent_width=self.latent_width,
             latent_height=self.latent_height,
         )
 
 
-class TimestepDistributionWindow(ctk.CTkToplevel):
+class TimestepDistributionWindow(QDialog):
     def __init__(
-            self,
-            parent,
-            config: TrainConfig,
-            ui_state: UIState,
-            *args, **kwargs,
+        self,
+        parent,
+        config: TrainConfig,
+        ui_state: UIState,
+        *args,
+        **kwargs,
     ):
-        ctk.CTkToplevel.__init__(self, parent, *args, **kwargs)
+        super().__init__(parent, *args, **kwargs)
 
         self.config = config
         self.ui_state = ui_state
 
-        self.image_preview_file_index = 0
+        self.setWindowTitle("Timestep Distribution")
+        self.resize(900, 600)
+        self.setModal(False)
 
-        self.title("Timestep Distribution")
-        self.geometry("900x600")
-        self.resizable(True, True)
-        self.wait_visibility()
-        set_window_icon(self)
-        self.grab_set()
-        self.focus_set()
+        main_layout = QGridLayout(self)
+        main_layout.setContentsMargins(5, 5, 5, 5)
+        main_layout.setSpacing(5)
+        self.setLayout(main_layout)
 
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(0, weight=1)
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        main_layout.addWidget(self.scroll_area, 0, 0, 1, 1)
 
-        self.ax = None
-        self.canvas = None
+        self.container = QFrame()
+        self.container_layout = QGridLayout(self.container)
+        self.container_layout.setContentsMargins(5, 5, 5, 5)
+        self.container_layout.setSpacing(5)
+        self.container.setLayout(self.container_layout)
+        self.scroll_area.setWidget(self.container)
 
-        frame = self.__content_frame(self)
-        frame.grid(row=0, column=0, sticky='nsew')
+        self.ok_button = components.button(self, 1, 0, "ok", command=self.__ok)
+        main_layout.addWidget(self.ok_button, 1, 0, alignment=Qt.AlignRight)
 
-        components.button(self, 1, 0, "ok", self.__ok)
-        self.after(150, lambda: set_window_icon(self))
+        self.__content_frame(self.container)
 
-    def __content_frame(self, master):
-        frame = ctk.CTkScrollableFrame(master, fg_color="transparent")
-        frame.grid_columnconfigure(0, weight=0)
-        frame.grid_columnconfigure(1, weight=0)
-        frame.grid_columnconfigure(2, weight=0)
-        frame.grid_columnconfigure(3, weight=1)
-        frame.grid_rowconfigure(7, weight=1)
-
-        # timestep distribution
-        components.label(frame, 0, 0, "Timestep Distribution",
-                         tooltip="Selects the function to sample timesteps during training",
+    def __content_frame(self, master: QFrame):
+        # row=0 => Timestep Distribution
+        components.label(master, 0, 0, "Timestep Distribution",
+                         tooltip="Selects the function to sample timesteps.",
                          wide_tooltip=True)
-        components.options(frame, 0, 1, [str(x) for x in list(TimestepDistribution)], self.ui_state,
-                           "timestep_distribution")
+        components.options(
+            master, 0, 1,
+            [str(x) for x in list(TimestepDistribution)],
+            self.ui_state,
+            "timestep_distribution"
+        )
 
         # min noising strength
-        components.label(frame, 1, 0, "Min Noising Strength",
-                         tooltip="Specifies the minimum noising strength used during training. This can help to improve composition, but prevents finer details from being trained")
-        components.entry(frame, 1, 1, self.ui_state, "min_noising_strength")
+        components.label(master, 1, 0, "Min Noising Strength")
+        components.entry(master, 1, 1, self.ui_state, "min_noising_strength")
 
         # max noising strength
-        components.label(frame, 2, 0, "Max Noising Strength",
-                         tooltip="Specifies the maximum noising strength used during training. This can be useful to reduce overfitting, but also reduces the impact of training samples on the overall image composition")
-        components.entry(frame, 2, 1, self.ui_state, "max_noising_strength")
+        components.label(master, 2, 0, "Max Noising Strength")
+        components.entry(master, 2, 1, self.ui_state, "max_noising_strength")
 
         # noising weight
-        components.label(frame, 3, 0, "Noising Weight",
-                         tooltip="Controls the weight parameter of the timestep distribution function. Use the preview to see more details.")
-        components.entry(frame, 3, 1, self.ui_state, "noising_weight")
+        components.label(master, 3, 0, "Noising Weight")
+        components.entry(master, 3, 1, self.ui_state, "noising_weight")
 
         # noising bias
-        components.label(frame, 4, 0, "Noising Bias",
-                         tooltip="Controls the bias parameter of the timestep distribution function. Use the preview to see more details.")
-        components.entry(frame, 4, 1, self.ui_state, "noising_bias")
+        components.label(master, 4, 0, "Noising Bias")
+        components.entry(master, 4, 1, self.ui_state, "noising_bias")
 
         # timestep shift
-        components.label(frame, 5, 0, "Timestep Shift",
-                         tooltip="Shift the timestep distribution. Use the preview to see more details.")
-        components.entry(frame, 5, 1, self.ui_state, "timestep_shift")
+        components.label(master, 5, 0, "Timestep Shift")
+        components.entry(master, 5, 1, self.ui_state, "timestep_shift")
 
         # dynamic timestep shifting
-        components.label(frame, 6, 0, "Dynamic Timestep Shifting",
-                         tooltip="Dynamically shift the timestep distribution based on resolution. For the preview, a random resolution between 512 and 1024 is used, assuming a VAE scale factor of 8. During training, the actual resolution.")
-        components.switch(frame, 6, 1, self.ui_state, "dynamic_timestep_shifting")
+        components.label(master, 6, 0, "Dynamic Timestep Shifting")
+        components.switch(master, 6, 1, self.ui_state, "dynamic_timestep_shifting")
 
+        # We'll embed a matplotlib figure in row=0..8 col=2
+        # Create the figure
+        self.fig = Figure(figsize=(4, 4))
+        self.ax = self.fig.add_subplot(111)
+        self.canvas = FigureCanvas(self.fig)
+        self.container_layout.addWidget(self.canvas, 0, 2, 8, 1)
 
-        # plot
-        appearance_mode = AppearanceModeTracker.get_mode()
-        background_color = self.winfo_rgb(ThemeManager.theme["CTkToplevel"]["fg_color"][appearance_mode])
-        text_color = self.winfo_rgb(ThemeManager.theme["CTkLabel"]["text_color"][appearance_mode])
-        background_color = f"#{int(background_color[0]/256):x}{int(background_color[1]/256):x}{int(background_color[2]/256):x}"
-        text_color = f"#{int(text_color[0]/256):x}{int(text_color[1]/256):x}{int(text_color[2]/256):x}"
-
-        fig, ax = plt.subplots()
-        self.ax = ax
-        self.canvas = FigureCanvasTkAgg(fig, master=frame)
-        self.canvas.get_tk_widget().grid(row=0, column=3, rowspan=8)
-
-        fig.set_facecolor(background_color)
-        ax.set_facecolor(background_color)
-        ax.spines['bottom'].set_color(text_color)
-        ax.spines['left'].set_color(text_color)
-        ax.spines['top'].set_color(text_color)
-        ax.spines['right'].set_color(text_color)
-        ax.tick_params(axis='x', colors=text_color, which="both")
-        ax.tick_params(axis='y', colors=text_color, which="both")
-        ax.xaxis.label.set_color(text_color)
-        ax.yaxis.label.set_color(text_color)
+        self.__update_preview_button = components.button(
+            master, 8, 2, "Update Preview", command=self.__update_preview
+        )
 
         self.__update_preview()
-
-        # update button
-        components.button(frame, 8, 3, "Update Preview", command=self.__update_preview)
-
-        frame.pack(fill="both", expand=1)
-        return frame
 
     def __update_preview(self):
         resolution = random.randint(512, 1024)
@@ -195,9 +175,10 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
             latent_height=resolution // 8,
         )
 
-        self.ax.cla()
-        self.ax.hist(generator.generate(), bins=1000, range=(0, 999))
+        self.ax.clear()
+        data = generator.generate()
+        self.ax.hist(data.numpy(), bins=1000, range=(0, 999))
         self.canvas.draw()
 
     def __ok(self):
-        self.destroy()
+        self.close()

@@ -1,14 +1,25 @@
-from modules.ui.ConfigList import ConfigList
+
+# These classes get acivated under the Training tab, if you want to set parameters for a
+# "Custom" scheduler, instead of the usual LINEAR, COSINE, etc.
+
+
+from typing import Any, Callable
+
+from PySide6.QtWidgets import (
+    QDialog, QGridLayout, QFrame, QPushButton, QVBoxLayout, QHBoxLayout
+)
+from PySide6.QtCore import Qt
+
+from modules.ui.OTConfigFrame import OTConfigFrame
+
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.LearningRateScheduler import LearningRateScheduler
 from modules.util.ui import components
-from modules.util.ui.ui_utils import set_window_icon
 from modules.util.ui.UIState import UIState
 
-import customtkinter as ctk
 
+class KvParamsFrame(OTConfigFrame):
 
-class KvParams(ConfigList):
     def __init__(self, master, train_config: TrainConfig, ui_state: UIState):
         super().__init__(
             master,
@@ -21,97 +32,127 @@ class KvParams(ConfigList):
         )
 
     def refresh_ui(self):
-        self._create_element_list()
+        self.__create_element_list()
 
+    # called by super.__add_element()
     def create_widget(self, master, element, i, open_command, remove_command, clone_command, save_command):
-        return KvWidget(master, element, i, open_command, remove_command, clone_command, save_command)
+        try:
+            w = KvParamsWidget(element, i, open_command, remove_command, clone_command, save_command)
+        except Exception as e:
+            print(f"KvParamsFrame.create_widget: Error creating KvParamswidget: {e}")
+            w = None
+        
+        return w
 
     def create_new_element(self) -> dict[str, str]:
         return {"key": "", "value": ""}
 
+
     def open_element_window(self, i, ui_state):
+        # we dont need a deeper "edit" popup. 
+        # But superclass forces us to implement this function
         pass
 
-
-class KvWidget(ctk.CTkFrame):
-    def __init__(self, master, element, i, open_command, remove_command, clone_command, save_command):
-        super().__init__(master=master, bg_color="transparent")
+# class that displays one or more items, in the larger frame
+class KvParamsWidget(QFrame):
+    def __init__(
+            self,
+            element, 
+            i: int, 
+            open_command: Callable[..., None], 
+            remove_command: Callable[..., None], 
+            clone_command: Callable[..., None], 
+            save_command: Callable[..., None]
+    ):
+        super().__init__()
         self.element = element
         self.ui_state = UIState(self, element)
         self.i = i
         self.save_command = save_command
 
-        self.grid_columnconfigure(0, weight=0)
-        self.grid_columnconfigure(1, weight=1, uniform=1)
-        self.grid_columnconfigure(2, weight=1, uniform=1)
+        qglayout = QGridLayout(self)
+        qglayout.setContentsMargins(0,0,0,0)
+        qglayout.setSpacing(5)
 
-        close_button = ctk.CTkButton(
-            master=self,
-            width=20,
-            height=20,
-            text="X",
-            corner_radius=2,
-            fg_color="#C00000",
-            command=lambda: remove_command(self.i))
-        close_button.grid(row=0, column=0)
-
+        # "X" close button
+        close_button = components.button(self, 0, 0, "X",
+                                         command=lambda: remove_command(self.i),
+                                         tooltip="Remove this parameter")
+                
         # Key
         tooltip_key = "Key name for an argument in your scheduler"
-        self.key = components.entry(self, 0, 1, self.ui_state, "key",
-                                    tooltip=tooltip_key, wide_tooltip=True)
-        self.key.bind("<FocusOut>", lambda _: save_command())
-        self.key.configure(width=50)
+        self.key_entry = components.entry(
+            self, 0, 1, self.ui_state, "key", tooltip=tooltip_key, wide_tooltip=True,width=0
+        )
+        self.key_entry.editingFinished.connect(self.save_command)
 
         # Value
-        tooltip_val = "Value for an argument in your scheduler. Some special values can be used, wrapped in percent signs: LR, EPOCHS, STEPS_PER_EPOCH, TOTAL_STEPS, SCHEDULER_STEPS. Note that OneTrainer calls step() after every individual learning step, not every epoch, so what Torch calls 'epoch' you should treat as 'step'."
-        self.value = components.entry(self, 0, 2, self.ui_state, "value",
-                                      tooltip=tooltip_val, wide_tooltip=True)
-        self.value.bind("<FocusOut>", lambda _: save_command())
-        self.value.configure(width=50)
+        tooltip_val = (
+            "Value for an argument in your scheduler. Some special values can be used, wrapped in percent signs: "
+            "LR, EPOCHS, STEPS_PER_EPOCH, TOTAL_STEPS, SCHEDULER_STEPS."
+        )
+        self.value_entry = components.entry(
+            self, 0, 2, self.ui_state, "value", tooltip=tooltip_val,wide_tooltip=True,width=0
+        )
+        self.value_entry.editingFinished.connect(self.save_command)
+
+        qglayout.setColumnStretch(0,0)
+        qglayout.setColumnStretch(1,1) 
+        qglayout.setColumnStretch(2,1)
+
 
     def place_in_list(self):
-        self.grid(row=self.i, column=0, padx=5, pady=5, sticky="new")
+        self.layout.setRowMinimumHeight(self.i, 30)
+        self.layout.setRowStretch(self.i, 0)
+        self.layout.setColumnStretch(2, 1)
+        self.grid_layout_parent = self.parentWidget().layout()
+        if self.grid_layout_parent:
+            self.grid_layout_parent.addWidget(self, self.i, 0, 1, 1)
 
 
-class SchedulerParamsWindow(ctk.CTkToplevel):
+# This is what gets called from the TrainingTab class
+class SchedulerParamsWindow(QDialog):
     def __init__(self, parent, train_config: TrainConfig, ui_state, *args, **kwargs):
-        ctk.CTkToplevel.__init__(self, parent, *args, **kwargs)
+        super().__init__(parent, *args, **kwargs)
 
         self.parent = parent
         self.train_config = train_config
         self.ui_state = ui_state
 
-        self.title("Learning Rate Scheduler Settings")
-        self.geometry("800x400")
-        self.resizable(True, True)
-        set_window_icon(self)
-        self.wait_visibility()
-        self.grab_set()
-        self.focus_set()
+        self.setWindowTitle("Learning Rate Scheduler Settings")
+        self.resize(800, 400)
+        self.setModal(False)
 
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=0)
-        self.grid_columnconfigure(0, weight=1)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(5,5,5,5)
+        main_layout.setSpacing(5)
+        self.setLayout(main_layout)
+        
+        self.frame = QFrame(self)
+        self.frame_layout = QHBoxLayout(self.frame)
+        self.frame_layout.setContentsMargins(5,5,5,5)
+        self.frame_layout.setSpacing(5)
+        
+        if self.train_config.learning_rate_scheduler == LearningRateScheduler.CUSTOM:
+            components.label(self.frame, 0, 0, "Class Name",
+                             tooltip="Python class module and name for the custom scheduler class.")
+            components.entry(self.frame, 0, 1, self.ui_state, "custom_learning_rate_scheduler")
+            #self.frame_layout.setStretch(0,0)
+            #self.frame_layout.setStretch(1,1)
+            self.frame_layout.addStretch()
 
-        self.frame = ctk.CTkFrame(self)
-        self.frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        self.frame.grid_columnconfigure(0, weight=0)
-        self.frame.grid_columnconfigure(1, weight=1)
-        self.expand_frame = ctk.CTkFrame(self.frame, bg_color="transparent")
-        self.expand_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        main_layout.addWidget(self.frame)
 
-        components.button(self, 1, 0, "ok", command=self.on_window_close)
-        self.main_frame(self.frame)
-        self.after(150, lambda: set_window_icon(self))
+        main_layout.addWidget(KvParamsFrame(self, self.train_config, self.ui_state))
 
-    def main_frame(self, master):
-        if self.train_config.learning_rate_scheduler is LearningRateScheduler.CUSTOM:
-            components.label(master, 0, 0, "Class Name",
-                             tooltip="Python class module and name for the custom scheduler class, in the form of <module>.<class_name>.")
-            components.entry(master, 0, 1, self.ui_state, "custom_learning_rate_scheduler")
+        main_layout.addStretch()
 
-        # Any additional parameters, in key-value form.
-        self.params = KvParams(self.expand_frame, self.train_config, self.ui_state)
+        # "ok" button
+        self.ok_button = components.button(self, 1, 0, "ok", self.on_window_close)
+        main_layout.addWidget(self.ok_button, alignment=Qt.AlignRight)
+
+
+ 
 
     def on_window_close(self):
-        self.destroy()
+        self.close()
